@@ -1,0 +1,88 @@
+@import "tailwindcss";
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-quartz.css";
+
+:root {
+  --bg-page: #F4F5F7;
+  --bg-card: #FFFFFF;
+  --border-card: #E3E6EB;
+  --border-input: #D5D9E0;
+  --text-main: #1B2430;
+  --text-muted: #5B6676;
+  --primary-blue: #1E4FD8;
+  --primary-blue-hover: #163BA3;
+  --blue-tint: #E8EEFD;
+
+  /* AI Violet */
+  --ai-text: #3F2A9E;
+  --ai-accent: #5B3FD0;
+  --ai-bg: #F3F0FE;
+  --ai-border: #DDD6FA;
+
+  /* Status Colors */
+  --status-reviewed-text: #0B6B4D;
+  --status-reviewed-bg: #E2F4EC;
+  --status-prepared-text: #1E4FD8;
+  --status-prepared-bg: #E8EEFD;
+  --status-inprogress-text: #3B4658;
+  --status-inprogress-bg: #E8EBF0;
+  --status-attention-text: #9A4A00;
+  --status-attention-bg: #FFF1DC;
+  --status-notstarted-text: #5B6676;
+  --status-locked-text: #4B3A9E;
+  --status-locked-bg: #EEEAFB;
+}
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-main);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular numerals font for financial figures */
+.font-mono-numbers {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom focus ring per guidelines */
+*:focus-visible {
+  outline: 2px solid var(--primary-blue) !important;
+  outline-offset: 2px !important;
+}
+
+/* Standardized cards */
+.wp-card {
+  background-color: #FFFFFF;
+  border: 1px solid var(--border-card);
+  border-radius: 14px;
+}
+
+/* AG Grid Overrides to fit light calm design */
+.ag-theme-quartz {
+  --ag-font-family: var(--font-sans), sans-serif;
+  --ag-font-size: 13px;
+  --ag-background-color: #ffffff;
+  --ag-header-background-color: #f8f9fa;
+  --ag-border-color: #e3e6eb;
+  --ag-row-border-color: #e3e6eb;
+  --ag-selected-row-background-color: #e8eefd;
+  --ag-range-selection-border-color: #1e4fd8;
+  --ag-range-selection-background-color: rgba(30, 79, 216, 0.08);
+}
+
+.ag-theme-quartz .ag-header-cell-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5B6676;
+}
+
+.ag-theme-quartz .number-cell {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
