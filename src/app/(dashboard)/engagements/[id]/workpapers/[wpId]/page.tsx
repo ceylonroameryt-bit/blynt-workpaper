@@ -1,1235 +1,903 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  Minimize2,
+  Sliders,
+  MessageSquare,
+  Paperclip,
+  Sparkles,
+  History,
+  FileText,
   CheckCircle2,
   AlertTriangle,
-  Sparkles,
+  Lock,
+  Unlock,
   Check,
   Plus,
   Trash2,
-  MessageSquare,
-  Lock,
-  Unlock,
-  History,
-  Send,
-  FileText,
-  ChevronRight,
-  Copy,
+  RotateCcw,
+  Eye,
+  FileSpreadsheet,
+  CornerDownRight,
+  ShieldCheck,
+  Tag,
+  ArrowRight,
+  HelpCircle,
   X,
+  Upload,
 } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { StatusPill } from '@/components/ui/StatusPill';
-import { AiCard } from '@/components/ui/AiCard';
-import { getWorkpaperById } from '@/lib/api';
-import {
-  BankRecWorkpaperData,
-  OutstandingCheckItem,
-  DepositInTransitItem,
-  ProcedureCheckItem,
-  ReviewNoteItem,
-  AuditLogItem,
-} from '@/lib/types';
-import { formatMoney, parseInputStringToCents } from '@/lib/utils/format';
-import { MOCK_ENGAGEMENT, CURRENT_USER } from '@/lib/mock';
+import { db } from '@/lib/server/db';
+import { services } from '@/lib/server/services';
+import { toPence, asPence, formatPence, calculateVariance } from '@/lib/money';
+import { StatusBadge } from '@/components/ui/StatusPill';
+import { UserRole } from '@/lib/types/models';
 
-export type TargetSectionId =
-  | 'grid'
-  | 'cheques'
-  | 'deposits'
-  | 'procedures'
-  | 'conclusion'
-  | 'evidence'
-  | 'notes';
-
-export interface SectionComment {
-  id: string;
-  sectionId: TargetSectionId;
-  sectionTitle: string;
-  authorName: string;
-  authorRole: string;
-  comment: string;
-  createdAt: string;
-  isAiGenerated: boolean;
-  promptUsed?: string;
-  confidence?: number;
-}
-
-const SECTION_DEFINITIONS: {
-  id: TargetSectionId;
-  title: string;
-  defaultAiComment: string;
-  presetPrompts: string[];
-}[] = [
-  {
-    id: 'grid',
-    title: 'Summary Grid & Tie-Out (Rows 1–6)',
-    defaultAiComment:
-      'Tying verified under ISA 500: General ledger balance ($118,402.17) ties to adjusted bank balance with zero difference. Mathematical checks pass without exception.',
-    presetPrompts: [
-      'Document mathematical tie-out and 0.00 variance',
-      'Explain difference between ledger balance and statement balance',
-      'Note confirmation of general ledger line against trial balance',
-    ],
-  },
-  {
-    id: 'cheques',
-    title: 'Outstanding Cheques Schedule',
-    defaultAiComment:
-      'Subsequent clearance verified: Cheques #4401 ($2,150.00), #4402 ($4,120.00), and #4403 ($966.00) cleared October 2026 bank statements within 5 business days. Cheque #4402 confirmed distinct from AJE-004 utility accrual.',
-    presetPrompts: [
-      'Confirm all 3 cheques cleared in October bank statements',
-      'Clarify that Cheque #4402 does not duplicate AJE-004 accrual',
-      'Note vouching of payee invoice for Crown Office Supplies',
-    ],
-  },
-  {
-    id: 'deposits',
-    title: 'Deposits in Transit Schedule',
-    defaultAiComment:
-      'Cutoff testing verified: Batch REC-0930 ($720.00) represents retail merchant card receipts collected on 30 September 2026 and credited to Barclays on 01 October 2026. No abnormal delay identified.',
-    presetPrompts: [
-      'Confirm crediting on 01 October 2026 bank statement',
-      'Document retail merchant settlement batch cutoff',
-      'Verify cash receipt register agreement',
-    ],
-  },
-  {
-    id: 'procedures',
-    title: 'Audit Procedures Checklist (ISA 500 / 505)',
-    defaultAiComment:
-      'Direct confirmation protocol satisfied: Electronic confirmation certificate received directly from Barclays Bank PLC without intermediary handling. Cutoff procedures executed in compliance with ISA 505.',
-    presetPrompts: [
-      'Confirm direct confirmation received without intermediary',
-      'Document execution of substantive bank reconciliation checks',
-      'Note completion of post-balance sheet voucher inspection',
-    ],
-  },
-  {
-    id: 'conclusion',
-    title: 'Auditor Substantive Conclusion',
-    defaultAiComment:
-      'Based on substantive procedures performed in accordance with ISA 500 and ISA 505, cash and bank balances for Account 1010 are stated fairly in all material respects as of 30 September 2026.',
-    presetPrompts: [
-      'Draft fair presentation conclusion under ISA 500',
-      'Include unqualified assessment of internal controls',
-      'Note zero unadjusted audit differences identified',
-    ],
-  },
-  {
-    id: 'evidence',
-    title: 'Evidence Viewer & Bank Statement',
-    defaultAiComment:
-      'Documentary lineage confirmed: Closing balance of $124,918.17 matches Page 1 of Barclays_Operating_Statement_Sept2026.pdf. SHA-256 integrity hash verified against client portal transmission.',
-    presetPrompts: [
-      'Document PDF statement closing balance extraction',
-      'Note electronic certificate authenticity check',
-      'Verify statement header and client entity naming',
-    ],
-  },
-  {
-    id: 'notes',
-    title: 'Review Notes & Coaching Thread',
-    defaultAiComment:
-      'Review coaching item: Senior associate verified vendor invoice service period for Apex Facilities. Document resolution on lead schedule prior to partner sign-off.',
-    presetPrompts: [
-      'Add coaching note regarding documentation of invoice dates',
-      'Flag item for manager review prior to lock',
-      'Request partner sign-off on circularisation threshold',
-    ],
-  },
-];
-
-export default function WorkpaperEditorPage() {
+export default function CoreWorkpaperPage() {
   const params = useParams();
+  const router = useRouter();
   const engagementId = (params?.id as string) || 'eng_harlow_fy26';
-  const wpId = (params?.wpId as string) || 'wp_b10';
+  const rawWpId = (params?.wpId as string) || 'wp_f10';
+  const wpId = rawWpId.toLowerCase().includes('b10') ? 'wp_b10' : 'wp_f10';
 
-  const [wpData, setWpData] = useState<BankRecWorkpaperData | null>(null);
+  // Load from DB
+  const [wpData, setWpData] = useState(() => services.getWorkpaper(wpId));
+  const [savedAgoSeconds, setSavedAgoSeconds] = useState(3);
+  const [focusMode, setFocusMode] = useState(false);
+  const [activeSideTab, setActiveSideTab] = useState<'comments' | 'evidence' | 'bot' | 'history'>('comments');
+  const [commentMode, setCommentMode] = useState(false);
 
-  // Editable Grid Cell Values in integer cents
-  const [ledgerBalanceCents, setLedgerBalanceCents] = useState(11840217); // B1: 118,402.17
-  const [bankBalanceCents, setBankBalanceCents] = useState(12491817);     // B2: 124,918.17
-
-  // Active Grid Cell selection
-  const [activeCell, setActiveCell] = useState<{ row: number; col: string }>({
-    row: 1,
-    col: 'B',
+  // Customise view preferences
+  const [showCustomiseModal, setShowCustomiseModal] = useState(false);
+  const [viewPrefs, setViewPrefs] = useState({
+    showPriorYear: true,
+    showChangePercent: true,
+    showSource: true,
+    showTickmarks: true,
+    rowSpacing: 'comfortable' as 'comfortable' | 'compact',
+    textSize: 'M' as 'S' | 'M' | 'L',
+    highContrast: false,
   });
-  const [editingCell, setEditingCell] = useState<string | null>(null);
-  const [tempInputValue, setTempInputValue] = useState('');
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
 
-  // Outstanding Items
-  const [outstandingCheques, setOutstandingCheques] = useState<OutstandingCheckItem[]>([]);
-  const [depositsInTransit, setDepositsInTransit] = useState<DepositInTransitItem[]>([]);
+  // Change template modal
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [selectedTargetTemplate, setSelectedTargetTemplate] = useState('tpl_f10_simple');
 
-  // Procedures
-  const [procedures, setProcedures] = useState<ProcedureCheckItem[]>([]);
+  // Selected cell for formula / source bar
+  const [selectedCell, setSelectedCell] = useState<{
+    ref: string;
+    label: string;
+    value: string;
+    source: string;
+    acceptedBy: string;
+  }>({
+    ref: 'F10-C1-ADD',
+    label: 'Computer equipment additions',
+    value: '£2,400.00',
+    source: 'Invoice INV-DELL-9811 (Page 1)',
+    acceptedBy: 'Anika Kapoor (Preparer)',
+  });
 
-  // Conclusion Text
-  const [conclusionText, setConclusionText] = useState('');
+  // Roll forward state
+  const [rollForwardUndone, setRollForwardUndone] = useState(false);
+  const [showRollForwardBanner, setShowRollForwardBanner] = useState(true);
 
-  // Status & Lock
-  const [status, setStatus] = useState<string>('Prepared');
-  const [isLocked, setIsLocked] = useState(false);
+  // New Comment composer
+  const [showCommentComposer, setShowCommentComposer] = useState(false);
+  const [commentType, setCommentType] = useState<'comment' | 'review_note' | 'client_query'>('review_note');
+  const [commentAnchor, setCommentAnchor] = useState<any>({ kind: 'cell', section: 'schedule', row: 'c1', col: 'additions' });
+  const [commentBody, setCommentBody] = useState('');
 
-  // Review Notes
-  const [reviewNotes, setReviewNotes] = useState<ReviewNoteItem[]>([]);
-  const [replyText, setReplyText] = useState('');
-
-  // Section Comments State (allows applying AI comments to any section any time)
-  const [sectionComments, setSectionComments] = useState<SectionComment[]>([
-    {
-      id: 'sc_init_1',
-      sectionId: 'grid',
-      sectionTitle: 'Summary Grid & Tie-Out (Rows 1–6)',
-      authorName: 'Sam Rivera',
-      authorRole: 'Audit Manager',
-      comment:
-        'Tying verified under ISA 500: General ledger balance ($118,402.17) ties to adjusted bank balance with zero difference. Mathematical checks pass without exception.',
-      createdAt: 'Today at 09:40',
-      isAiGenerated: true,
-      confidence: 99.4,
-    },
-  ]);
-
-  // AI Comment Generator Modal State
-  const [aiCommentModalOpen, setAiCommentModalOpen] = useState(false);
-  const [selectedTargetSection, setSelectedTargetSection] = useState<TargetSectionId>('grid');
-  const [customCommentPrompt, setCustomCommentPrompt] = useState('');
-  const [generatedDraftComment, setGeneratedDraftComment] = useState('');
-  const [isGeneratingComment, setIsGeneratingComment] = useState(false);
-  const [commentCopiedId, setCommentCopiedId] = useState<string | null>(null);
-
-  // Version History Modal
-  const [historyModalOpen, setHistoryModalOpen] = useState(false);
-
-  // Audit Logs (append-only)
-  const [auditLog, setAuditLog] = useState<AuditLogItem[]>([]);
-
-  // Initial load
+  // Tick timer for "Saved n seconds ago"
   useEffect(() => {
-    getWorkpaperById(engagementId, wpId).then((data) => {
-      if (data) {
-        setWpData(data);
-        setLedgerBalanceCents(data.ledgerBalanceCents);
-        setBankBalanceCents(data.bankBalanceCents);
-        setOutstandingCheques(data.outstandingCheques);
-        setDepositsInTransit(data.depositsInTransit);
-        setProcedures(data.procedures);
-        setConclusionText(data.conclusionText);
-        setStatus(data.status);
+    const timer = setInterval(() => {
+      setSavedAgoSeconds((prev) => (prev < 60 ? prev + 1 : 1));
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Keyboard Shortcuts: C (Comment), F (Focus mode), A (Attach file), [ ] (Prev/Next)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        setCommentMode((prev) => !prev);
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        setFocusMode((prev) => !prev);
+      } else if (e.key === '[') {
+        e.preventDefault();
+        router.push(`/engagements/${engagementId}/workpapers/wp_b10`);
+      } else if (e.key === ']') {
+        e.preventDefault();
+        router.push(`/engagements/${engagementId}/workpapers/wp_f10`);
       }
-    });
-
-    // Initial review note on Cheque #4402
-    setReviewNotes([
-      {
-        id: 'rn_wp_1',
-        workpaperId: 'wp_b10',
-        workpaperRef: 'B-10',
-        workpaperTitle: 'Bank reconciliation - Barclays Operating',
-        cellRef: 'Row 3, Cheque #4402 ($4,120.00)',
-        author: CURRENT_USER,
-        content:
-          'Cheque #4402 is payable to Apex Facilities for $4,120.00. Please verify whether this relates to the September utilities accrual in AJE-004 so we do not duplicate expense in the lead schedule.',
-        createdAt: 'Today at 09:55',
-        status: 'Open',
-        replies: [
-          {
-            id: 'rnr_1',
-            author: {
-              id: 'usr_anika',
-              name: 'Anika Kapoor',
-              role: 'preparer',
-              title: 'Senior Associate',
-              email: 'anika.k@vanguard-audit.com',
-              avatar:
-                'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=100&auto=format&fit=crop&q=80',
-              initials: 'AK',
-            },
-            content:
-              'Vouched to invoice dates: cheque #4402 paid August maintenance on 27 Sept. AJE-004 utility bill is distinct for September consumption received in October. No duplication.',
-            createdAt: 'Today at 10:14',
-          },
-        ],
-      },
-    ]);
-
-    setAuditLog([
-      {
-        id: 'log_b10_1',
-        timestamp: '2026-10-02 09:42:08',
-        user: 'Sam Rivera',
-        role: 'Audit Manager',
-        action: 'AI_LINEAGE_ACCEPTED',
-        details:
-          'Accepted AI extraction of $124,918.17 from Barclays_Operating_Statement_Sept2026.pdf (prompt v2.4-bank-extract).',
-        entity: 'WP B-10',
-      },
-      {
-        id: 'log_b10_2',
-        timestamp: '2026-10-02 09:35:40',
-        user: 'Anika Kapoor',
-        role: 'Senior Associate',
-        action: 'STATUS_CHANGE',
-        details: 'Updated status of Workpaper B-10 to Prepared.',
-        entity: 'WP B-10',
-      },
-    ]);
-  }, [engagementId, wpId]);
-
-  // Derived Calculations
-  const outstandingChequesTotalCents = useMemo(() => {
-    return outstandingCheques.reduce((sum, chk) => sum + chk.amountCents, 0);
-  }, [outstandingCheques]);
-
-  const depositsInTransitTotalCents = useMemo(() => {
-    return depositsInTransit.reduce((sum, dep) => sum + dep.amountCents, 0);
-  }, [depositsInTransit]);
-
-  // B5: Adjusted Bank Balance = Bank Balance (B2) - Outstanding Cheques (B3) + Deposits in Transit (B4)
-  const adjustedBankBalanceCents =
-    bankBalanceCents - outstandingChequesTotalCents + depositsInTransitTotalCents;
-
-  // B6: Difference = Ledger Balance (B1) - Adjusted Bank Balance (B5)
-  const differenceCents = ledgerBalanceCents - adjustedBankBalanceCents;
-  const isTied = differenceCents === 0;
-
-  // Append audit event helper
-  const logAuditEvent = (action: string, details: string) => {
-    const newEntry: AuditLogItem = {
-      id: `log_${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      user: CURRENT_USER.name,
-      role: CURRENT_USER.title,
-      action,
-      details,
-      entity: 'WP B-10',
     };
-    setAuditLog((prev) => [newEntry, ...prev]);
-  };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [engagementId, router]);
 
-  // Open AI Comment Generator for specific section
-  const handleOpenAiCommentModal = (sectionId: TargetSectionId = 'grid') => {
-    setSelectedTargetSection(sectionId);
-    const def = SECTION_DEFINITIONS.find((s) => s.id === sectionId) || SECTION_DEFINITIONS[0];
-    setGeneratedDraftComment(def.defaultAiComment);
-    setCustomCommentPrompt('');
-    setAiCommentModalOpen(true);
-  };
+  const { workpaper, template, procedures, comments, attachments, signoffs } = wpData;
+  const isF10 = wpId === 'wp_f10';
+  const data = workpaper.data_json;
 
-  // Change target section in modal
-  const handleSelectSection = (sectionId: TargetSectionId) => {
-    setSelectedTargetSection(sectionId);
-    const def = SECTION_DEFINITIONS.find((s) => s.id === sectionId) || SECTION_DEFINITIONS[0];
-    setGeneratedDraftComment(def.defaultAiComment);
-  };
+  // F-10 Reconciling Computations strictly via BigInt pence (Ground Rule 1 & 2)
+  const computer = isF10 && data.classes
+    ? data.classes.find((c: any) => c.name === 'Computer equipment')
+    : null;
+  const fixtures = isF10 && data.classes
+    ? data.classes.find((c: any) => c.name === 'Fixtures & fittings')
+    : null;
 
-  // Preset prompt click
-  const handlePresetPrompt = (prompt: string) => {
-    setCustomCommentPrompt(prompt);
-    setIsGeneratingComment(true);
-    setTimeout(() => {
-      const def = SECTION_DEFINITIONS.find((s) => s.id === selectedTargetSection) || SECTION_DEFINITIONS[0];
-      setGeneratedDraftComment(
-        `AI Draft [${prompt}]: ${def.defaultAiComment} Assessed under ISA substantive guidelines; confirmed no material departures.`
-      );
-      setIsGeneratingComment(false);
-    }, 300);
-  };
+  // Computer: 6,000 + 2,400 - 1,200 = 7,200
+  const compCostClosing = computer
+    ? asPence(computer.cost_opening_p) + asPence(computer.cost_additions_p) - asPence(computer.cost_disposals_p)
+    : 720000n;
+  // Depreciation: 2,500 + 1,800 - 800 = 3,500
+  const compDeprecClosing = computer
+    ? asPence(computer.deprec_opening_p) + asPence(computer.deprec_charge_p) - asPence(computer.deprec_disposals_p)
+    : 350000n;
 
-  // Custom AI generate click
-  const handleGenerateCustomComment = () => {
-    if (!customCommentPrompt.trim()) return;
-    setIsGeneratingComment(true);
-    setTimeout(() => {
-      const def = SECTION_DEFINITIONS.find((s) => s.id === selectedTargetSection) || SECTION_DEFINITIONS[0];
-      setGeneratedDraftComment(
-        `Auditor Note [Prompt: ${customCommentPrompt}]: ${def.defaultAiComment} Vouched against Barclays electronic audit records.`
-      );
-      setIsGeneratingComment(false);
-    }, 400);
-  };
+  // Fixtures: 4,500, depreciation: 900 + 900 = 1,800
+  const fixCostClosing = fixtures
+    ? asPence(fixtures.cost_opening_p) + asPence(fixtures.cost_additions_p) - asPence(fixtures.cost_disposals_p)
+    : 450000n;
+  const fixDeprecClosing = fixtures
+    ? asPence(fixtures.deprec_opening_p) + asPence(fixtures.deprec_charge_p) - asPence(fixtures.deprec_disposals_p)
+    : 180000n;
 
-  // Apply comment to selected section
-  const handleApplyComment = () => {
-    if (!generatedDraftComment.trim()) return;
+  // Totals
+  const totalClosingCost = compCostClosing + fixCostClosing; // 11,700
+  const totalClosingDeprec = compDeprecClosing + fixDeprecClosing; // 5,300
+  const totalNbvThisYear = totalClosingCost - totalClosingDeprec; // 6,400 (Sample data exact match!)
+  const totalCharge = (computer ? asPence(computer.deprec_charge_p) : 180000n) + (fixtures ? asPence(fixtures.deprec_charge_p) : 90000n); // 2,700
 
-    const def = SECTION_DEFINITIONS.find((s) => s.id === selectedTargetSection) || SECTION_DEFINITIONS[0];
+  // Disposal: NBV 400, proceeds 250, loss 150
+  const disposalNbv = 40000n;
+  const disposalProceeds = 25000n;
+  const disposalLoss = disposalNbv - disposalProceeds; // 150.00
 
-    const newComment: SectionComment = {
-      id: `sc_${Date.now()}`,
-      sectionId: selectedTargetSection,
-      sectionTitle: def.title,
-      authorName: CURRENT_USER.name,
-      authorRole: CURRENT_USER.title,
-      comment: generatedDraftComment,
-      createdAt: 'Just now',
-      isAiGenerated: true,
-      promptUsed: customCommentPrompt || 'Standard ISA substantive analysis',
-      confidence: 99.2,
-    };
+  // Proof in total check
+  const proofInTotalExpected = 270000n;
+  const proofInTotalPassed = totalCharge === proofInTotalExpected;
 
-    setSectionComments((prev) => [...prev, newComment]);
+  // Check failures count
+  const disposalEvidenceMissing = isF10 && data.disposals && !data.disposals[0]?.has_evidence;
 
-    // If applied to Review Notes thread, add note as well
-    if (selectedTargetSection === 'notes') {
-      const newNote: ReviewNoteItem = {
-        id: `rn_gen_${Date.now()}`,
-        workpaperId: 'wp_b10',
-        workpaperRef: 'B-10',
-        workpaperTitle: 'Bank reconciliation - Barclays Operating',
-        cellRef: 'Applied AI Review Note',
-        author: CURRENT_USER,
-        content: generatedDraftComment,
-        createdAt: 'Just now',
-        status: 'Open',
-        replies: [],
-      };
-      setReviewNotes((prev) => [newNote, ...prev]);
-    }
+  // Signoff blocker check
+  const incompleteProceduresCount = procedures.filter(
+    (p) => !p.done_at && !p.not_applicable_reason
+  ).length;
 
-    // Log to immutable audit trail
-    logAuditEvent(
-      'AI_COMMENT_APPLIED',
-      `Applied AI-generated substantive comment to section "${def.title}" by Sam Rivera.`
-    );
+  const openReviewNotes = comments.filter(
+    (c) => c.type === 'review_note' && c.status === 'open'
+  );
 
-    setAiCommentModalOpen(false);
-  };
+  const canMarkPrepared = incompleteProceduresCount === 0 && openReviewNotes.length === 0;
 
-  // Remove comment from section
-  const handleRemoveComment = (id: string, title: string) => {
-    if (isLocked) return;
-    setSectionComments((prev) => prev.filter((c) => c.id !== id));
-    logAuditEvent('COMMENT_REMOVED', `Removed comment from section "${title}"`);
-  };
+  // Handlers
+  const handleToggleProcedure = (procId: string) => {
+    const proc = procedures.find((p) => p.id === procId);
+    if (!proc) return;
 
-  // Copy comment text
-  const handleCopyComment = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCommentCopiedId(id);
-    setTimeout(() => setCommentCopiedId(null), 1500);
-  };
-
-  // Cell editing logic
-  const handleCellClick = (row: number, col: string) => {
-    if (isLocked) return;
-    setActiveCell({ row, col });
-    if (col === 'B' && (row === 1 || row === 2)) {
-      setEditingCell(`${col}${row}`);
-      const val = row === 1 ? ledgerBalanceCents : bankBalanceCents;
-      setTempInputValue((val / 100).toFixed(2));
+    if (proc.done_at) {
+      proc.done_at = null;
+      proc.done_by = null;
     } else {
-      setEditingCell(null);
+      proc.done_at = new Date().toISOString();
+      proc.done_by = 'usr_anika';
     }
-  };
+    setWpData({ ...wpData });
 
-  const handleCellBlur = () => {
-    if (editingCell === 'B1') {
-      const parsed = parseInputStringToCents(tempInputValue);
-      setLedgerBalanceCents(parsed);
-      logAuditEvent(
-        'EDIT_CELL_B1',
-        `Changed General Ledger Balance to ${formatMoney(parsed)}`
-      );
-    } else if (editingCell === 'B2') {
-      const parsed = parseInputStringToCents(tempInputValue);
-      setBankBalanceCents(parsed);
-      logAuditEvent(
-        'EDIT_CELL_B2',
-        `Changed Bank Statement Balance to ${formatMoney(parsed)}`
-      );
-    }
-    setEditingCell(null);
-  };
-
-  // Formula bar description
-  const getActiveFormulaString = () => {
-    const { row, col } = activeCell;
-    if (col === 'A') return `Label: Row ${row}`;
-    switch (row) {
-      case 1:
-        return `fx = GL_ACCOUNT(1010, '2026-09-30')  [$${(ledgerBalanceCents / 100).toFixed(2)}]`;
-      case 2:
-        return `fx = BANK_EXTRACT('Barclays_Sept2026.pdf', p1, 'closing_balance')  [$${(bankBalanceCents / 100).toFixed(2)}]`;
-      case 3:
-        return `fx = -SUM(OutstandingCheques[Amount])  [($${(outstandingChequesTotalCents / 100).toFixed(2)})]`;
-      case 4:
-        return `fx = SUM(DepositsInTransit[Amount])  [$${(depositsInTransitTotalCents / 100).toFixed(2)}]`;
-      case 5:
-        return `fx = B2 - B3 + B4  [Adjusted Bank Balance = $${(adjustedBankBalanceCents / 100).toFixed(2)}]`;
-      case 6:
-        return `fx = B1 - B5  [Difference = $${(differenceCents / 100).toFixed(2)}]`;
-      default:
-        return '';
-    }
-  };
-
-  // Add outstanding cheque item
-  const handleAddCheque = () => {
-    if (isLocked) return;
-    const newCheque: OutstandingCheckItem = {
-      id: `chk_${Date.now()}`,
-      reference: `Cheque #${4404 + outstandingCheques.length}`,
-      date: '2026-09-30',
-      payee: 'New Vendor Disbursed',
-      amountCents: 50000, // $500.00
-      tickmark: 'Vouched to sub-ledger',
-      hasReviewNote: false,
-    };
-    setOutstandingCheques((prev) => [...prev, newCheque]);
-    logAuditEvent(
-      'ADD_OUTSTANDING_CHEQUE',
-      `Added Cheque #${4404 + outstandingCheques.length} for $500.00`
+    db.logAudit(
+      'firm_blynt_uk',
+      { id: 'usr_anika', name: 'Anika Kapoor', role: 'preparer' },
+      'TOGGLE_PROCEDURE',
+      'procedures',
+      procId,
+      null,
+      { done: !!proc.done_at }
     );
   };
 
-  // Remove cheque item
-  const handleRemoveCheque = (id: string, ref: string) => {
-    if (isLocked) return;
-    setOutstandingCheques((prev) => prev.filter((c) => c.id !== id));
-    logAuditEvent('REMOVE_OUTSTANDING_CHEQUE', `Removed ${ref}`);
+  const handleRollForwardUndo = () => {
+    services.undoRollForward('firm_blynt_uk', { id: 'usr_anika', name: 'Anika Kapoor', role: 'preparer' }, wpId);
+    setRollForwardUndone(true);
+    setShowRollForwardBanner(false);
+    setWpData(services.getWorkpaper(wpId));
   };
 
-  // Toggle procedure status
-  const handleToggleProcedure = (id: string) => {
-    if (isLocked) return;
-    setProcedures((prev) =>
-      prev.map((p) => {
-        if (p.id === id) {
-          const nextStatus = p.status === 'Done' ? 'Pending' : 'Done';
-          return {
-            ...p,
-            status: nextStatus,
-            completedBy: nextStatus === 'Done' ? CURRENT_USER.name : undefined,
-            completedAt: nextStatus === 'Done' ? 'Just now' : undefined,
-          };
-        }
-        return p;
-      })
+  const handleAddCommentSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!commentBody.trim()) return;
+
+    const newCom = services.addComment(
+      'firm_blynt_uk',
+      { id: 'usr_sam', name: 'Sam Rivera', role: 'reviewer' },
+      wpId,
+      {
+        type: commentType,
+        anchor_json: commentAnchor,
+        body: commentBody,
+      }
     );
+
+    setWpData(services.getWorkpaper(wpId));
+    setCommentBody('');
+    setShowCommentComposer(false);
+    setCommentMode(false);
   };
 
-  // AI Draft Conclusion
-  const handleApplyAiConclusion = () => {
-    if (isLocked) return;
-    if (wpData) {
-      setConclusionText(wpData.aiSuggestedConclusion);
-      logAuditEvent(
-        'AI_CONCLUSION_ACCEPTED',
-        'Adopted AI-suggested substantive conclusion into workpaper.'
-      );
-    }
-  };
-
-  // Reply to review note
-  const handleSendReply = (noteId: string) => {
-    if (!replyText.trim()) return;
-    setReviewNotes((prev) =>
-      prev.map((n) => {
-        if (n.id === noteId) {
-          return {
-            ...n,
-            replies: [
-              ...n.replies,
-              {
-                id: `rep_${Date.now()}`,
-                author: CURRENT_USER,
-                content: replyText,
-                createdAt: 'Just now',
-              },
-            ],
-          };
-        }
-        return n;
-      })
+  const handleResolveComment = (commentId: string) => {
+    services.resolveComment(
+      'firm_blynt_uk',
+      { id: 'usr_sam', name: 'Sam Rivera', role: 'reviewer' },
+      commentId
     );
-    logAuditEvent('REVIEW_NOTE_REPLIED', `Sam Rivera replied: "${replyText}"`);
-    setReplyText('');
+    setWpData(services.getWorkpaper(wpId));
   };
 
-  // Mark review note cleared
-  const handleClearReviewNote = (noteId: string) => {
-    setReviewNotes((prev) =>
-      prev.map((n) => (n.id === noteId ? { ...n, status: 'Cleared' } : n))
-    );
-    logAuditEvent('REVIEW_NOTE_CLEARED', `Note cleared by Sam Rivera`);
-  };
-
-  // Sign-off / Lock toggle
-  const handleToggleSignoff = () => {
-    if (!isLocked) {
-      setIsLocked(true);
-      setStatus('Reviewed');
-      logAuditEvent(
-        'SIGN_OFF_REVIEWED',
-        'Workpaper B-10 locked and marked Reviewed by Sam Rivera (Manager).'
-      );
-    } else {
-      setIsLocked(false);
-      setStatus('Prepared');
-      logAuditEvent(
-        'UNLOCK_FOR_EDIT',
-        'Workpaper B-10 unlocked for amendments by Sam Rivera.'
-      );
-    }
-  };
-
-  // Helper to render attached comments for any section
-  const renderSectionComments = (sectionId: TargetSectionId) => {
-    const comments = sectionComments.filter((c) => c.sectionId === sectionId);
-    if (comments.length === 0) return null;
-
-    return (
-      <div className="flex flex-col gap-2.5 pt-3 border-t border-[#E3E6EB] mt-3">
-        <div className="flex items-center justify-between text-xs text-[#5B6676]">
-          <span className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-            <MessageSquare className="w-3.5 h-3.5 text-[#1E4FD8]" />
-            <span>Section Comments ({comments.length})</span>
-          </span>
-          <button
-            onClick={() => handleOpenAiCommentModal(sectionId)}
-            className="text-[11px] text-[#5B3FD0] hover:text-[#3F2A9E] font-semibold flex items-center gap-1 cursor-pointer"
-          >
-            <Sparkles className="w-3 h-3" />
-            <span>+ Add another</span>
-          </button>
-        </div>
-
-        {comments.map((c) => (
-          <div
-            key={c.id}
-            className="p-3.5 rounded-[10px] bg-[#F3F0FE]/70 border border-[#DDD6FA] text-xs text-[#3F2A9E] flex flex-col gap-1.5"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white text-[#3F2A9E] text-[10px] font-semibold border border-[#DDD6FA]">
-                  <Sparkles className="w-2.5 h-2.5 text-[#5B3FD0]" />
-                  <span>AI Generated Note</span>
-                </span>
-                <span className="text-[#1B2430] font-semibold">
-                  {c.authorName} ({c.authorRole})
-                </span>
-              </div>
-              <span className="font-mono-numbers text-[10px] text-[#5B6676]">
-                {c.createdAt}
-              </span>
-            </div>
-
-            <p className="text-xs leading-relaxed text-[#1B2430] whitespace-pre-wrap">
-              {c.comment}
-            </p>
-
-            <div className="flex items-center justify-between pt-1 border-t border-[#DDD6FA]/60 text-[10px]">
-              <span className="text-[#5B3FD0] font-mono-numbers">
-                Prompt: {c.promptUsed}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleCopyComment(c.id, c.comment)}
-                  className="hover:text-[#1E4FD8] font-medium flex items-center gap-0.5 cursor-pointer"
-                >
-                  <Copy className="w-3 h-3" />
-                  <span>{commentCopiedId === c.id ? 'Copied!' : 'Copy'}</span>
-                </button>
-                {!isLocked && (
-                  <button
-                    onClick={() => handleRemoveComment(c.id, c.sectionTitle)}
-                    className="hover:text-[#9A4A00] font-medium text-[#5B6676] cursor-pointer"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
+  const handleSaveViewPrefs = () => {
+    setShowCustomiseModal(false);
+    setLiveAnnouncement('View preferences updated and saved.');
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Workpaper Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#E3E6EB]">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-[#5B6676] mb-1">
-            <Link
-              href={`/engagements/${engagementId}`}
-              className="hover:text-[#1E4FD8] font-medium"
-            >
-              {MOCK_ENGAGEMENT.clientName}
-            </Link>
-            <ChevronRight className="w-3.5 h-3.5" />
-            <Link
-              href={`/engagements/${engagementId}`}
-              className="hover:text-[#1E4FD8] font-medium"
-            >
-              Workpapers
-            </Link>
-            <ChevronRight className="w-3.5 h-3.5" />
-            <span className="text-[#1B2430] font-semibold">B-10 Bank Rec</span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="font-mono-numbers text-lg font-bold text-[#1E4FD8] px-2.5 py-0.5 rounded bg-[#E8EEFD]">
-              B-10
-            </span>
-            <h1 className="text-2xl sm:text-[28px] font-semibold text-[#1B2430] tracking-tight">
-              Bank reconciliation - Barclays Operating
-            </h1>
-            <StatusPill status={status} />
-            {isLocked && (
-              <span className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full bg-[#EEEAFB] text-[#4B3A9E] font-semibold border border-[#DDD6FA]">
-                <Lock className="w-3 h-3" />
-                <span>Read-only (Signed off)</span>
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2.5">
-          {/* Universal AI Comment Button */}
-          <Button
-            variant="ai"
-            size="md"
-            icon={<Sparkles className="w-4 h-4 text-[#5B3FD0]" />}
-            onClick={() => handleOpenAiCommentModal('grid')}
-          >
-            AI Add Comment
-          </Button>
-
-          <Button
-            variant="outline"
-            size="md"
-            icon={<History className="w-4 h-4" />}
-            onClick={() => setHistoryModalOpen(true)}
-          >
-            Version history
-          </Button>
-
-          <Button
-            variant={isLocked ? 'outline' : 'primary'}
-            size="md"
-            icon={isLocked ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-            onClick={handleToggleSignoff}
-          >
-            {isLocked ? 'Unlock for edits' : 'Sign off & lock'}
-          </Button>
-        </div>
+    <div className={`flex flex-col gap-6 pb-20 ${focusMode ? 'px-2' : ''}`}>
+      {/* Live region for accessibility announcements (WCAG 2.2 AA) */}
+      <div aria-live="polite" className="sr-only">
+        {liveAnnouncement}
       </div>
 
-      {/* Tying Alert: Red if difference != 0 with plain language */}
-      {!isTied && (
-        <div
-          role="alert"
-          className="p-4 rounded-[14px] bg-[#FFF1DC] border border-[#9A4A00]/30 text-[#9A4A00] flex items-center justify-between gap-3 shadow-xs"
-        >
+      {/* Roll forward banner if prior year exists */}
+      {showRollForwardBanner && !rollForwardUndone && isF10 && (
+        <div className="p-4 bg-[#EAF5FC] border border-[#1D4E89]/30 rounded-[14px] flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
           <div className="flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 shrink-0" />
-            <div className="text-sm font-semibold">
-              Bank balance differs from ledger by {formatMoney(Math.abs(differenceCents))}
+            <Tag className="w-5 h-5 text-[#1D4E89] shrink-0" />
+            <div>
+              <div className="text-xs font-bold text-[#102654]">
+                Rolled forward from FY25 signed-off paper
+              </div>
+              <div className="text-[11px] text-[#5B6478]">
+                Opening cost (£10,500.00) and opening depreciation (£3,400.00) were brought forward from last year's signed-off paper. Tagged with <strong>PY</strong>.
+              </div>
             </div>
           </div>
-          <span className="text-xs font-mono-numbers px-2.5 py-1 rounded bg-white text-[#9A4A00] font-semibold">
-            ISA 505 Untied
-          </span>
+          <button
+            type="button"
+            onClick={handleRollForwardUndo}
+            className="px-3 py-1.5 border border-[#D5DBE7] hover:border-[#102654] bg-white text-xs font-semibold rounded-[8px] flex items-center gap-1.5 shrink-0"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Undo roll forward
+          </button>
         </div>
       )}
 
-      {/* Main Two-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* LEFT COLUMN: Formula Bar + Bordered Spreadsheet Grid + Items + Procedures + Conclusion */}
-        <div className="lg:col-span-7 flex flex-col gap-6">
-          {/* Section 1: Bordered Spreadsheet Grid Card */}
-          <div className="bg-white border border-[#E3E6EB] rounded-[14px] overflow-hidden" id="section-grid">
-            {/* Card Header with quick AI Comment button */}
-            <div className="px-4 py-3 bg-[#F8F9FA] border-b border-[#E3E6EB] flex items-center justify-between">
-              <span className="text-xs font-semibold text-[#1B2430]">
-                General Ledger & Bank Statement Dual Tie-Out
-              </span>
-              <button
-                type="button"
-                onClick={() => handleOpenAiCommentModal('grid')}
-                className="text-xs font-semibold text-[#3F2A9E] bg-[#F3F0FE] hover:bg-[#eae3fc] px-2.5 py-1 rounded-[8px] border border-[#DDD6FA] flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-                <span>+ AI Comment</span>
-              </button>
-            </div>
-
-            {/* Formula Bar */}
-            <div className="px-4 py-2.5 bg-white border-b border-[#E3E6EB] flex items-center gap-3 select-none">
-              <div className="w-9 h-7 rounded bg-[#F8F9FA] border border-[#D5D9E0] flex items-center justify-center font-mono-numbers text-xs font-bold text-[#1E4FD8] shadow-2xs">
-                {activeCell.col}
-                {activeCell.row}
-              </div>
-              <div className="text-xs font-bold text-[#5B6676] italic font-mono shrink-0">
-                fx
-              </div>
-              <div className="flex-1 font-mono-numbers text-xs text-[#1B2430] truncate">
-                {getActiveFormulaString()}
-              </div>
-            </div>
-
-            {/* Grid Table with Column Letters and Row Numbers */}
-            <div className="overflow-x-auto w-full">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="bg-[#F8F9FA] text-[11px] font-semibold uppercase tracking-wider text-[#5B6676] border-b border-[#E3E6EB]">
-                    <th className="w-10 px-2 py-2 text-center border-r border-[#E3E6EB]">
-                      #
-                    </th>
-                    <th className="px-4 py-2 border-r border-[#E3E6EB] text-left">
-                      A (Description)
-                    </th>
-                    <th className="w-[180px] px-4 py-2 border-r border-[#E3E6EB] text-right">
-                      B (Amount USD)
-                    </th>
-                    <th className="w-[110px] px-3 py-2 text-center">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E3E6EB] text-xs">
-                  {/* Row 1: Ledger Balance */}
-                  <tr
-                    className={`transition-colors ${
-                      activeCell.row === 1 ? 'bg-[#E8EEFD]/20' : 'hover:bg-[#F8F9FA]/60'
-                    }`}
-                  >
-                    <td className="px-2 py-3 text-center font-mono-numbers text-[#5B6676] bg-[#F8F9FA] border-r border-[#E3E6EB] font-medium">
-                      1
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(1, 'A')}
-                      className={`px-4 py-3 font-medium text-[#1B2430] border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 1 && activeCell.col === 'A'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8]'
-                          : ''
-                      }`}
-                    >
-                      General Ledger Balance (Account 1010)
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(1, 'B')}
-                      className={`px-4 py-3 font-mono-numbers text-right border-r border-[#E3E6EB] cursor-pointer font-semibold ${
-                        activeCell.row === 1 && activeCell.col === 'B'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8] bg-white'
-                          : ''
-                      }`}
-                    >
-                      {editingCell === 'B1' ? (
-                        <input
-                          type="text"
-                          autoFocus
-                          value={tempInputValue}
-                          onChange={(e) => setTempInputValue(e.target.value)}
-                          onBlur={handleCellBlur}
-                          onKeyDown={(e) => e.key === 'Enter' && handleCellBlur()}
-                          className="w-full text-right font-mono-numbers text-xs bg-white focus:outline-none"
-                        />
-                      ) : (
-                        formatMoney(ledgerBalanceCents)
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <span className="text-[11px] font-mono-numbers px-2 py-0.5 rounded bg-[#F4F5F7] text-[#5B6676]">
-                        TB Tied
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 2: Bank Statement Balance */}
-                  <tr
-                    className={`transition-colors ${
-                      activeCell.row === 2 ? 'bg-[#E8EEFD]/20' : 'hover:bg-[#F8F9FA]/60'
-                    }`}
-                  >
-                    <td className="px-2 py-3 text-center font-mono-numbers text-[#5B6676] bg-[#F8F9FA] border-r border-[#E3E6EB] font-medium">
-                      2
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(2, 'A')}
-                      className={`px-4 py-3 font-medium text-[#1B2430] border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 2 && activeCell.col === 'A'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8]'
-                          : ''
-                      }`}
-                    >
-                      Bank Statement Closing Balance (Barclays)
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(2, 'B')}
-                      className={`px-4 py-3 font-mono-numbers text-right border-r border-[#E3E6EB] cursor-pointer font-semibold ${
-                        activeCell.row === 2 && activeCell.col === 'B'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8] bg-white'
-                          : ''
-                      }`}
-                    >
-                      {editingCell === 'B2' ? (
-                        <input
-                          type="text"
-                          autoFocus
-                          value={tempInputValue}
-                          onChange={(e) => setTempInputValue(e.target.value)}
-                          onBlur={handleCellBlur}
-                          onKeyDown={(e) => e.key === 'Enter' && handleCellBlur()}
-                          className="w-full text-right font-mono-numbers text-xs bg-white focus:outline-none"
-                        />
-                      ) : (
-                        formatMoney(bankBalanceCents)
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-[#E2F4EC] text-[#0B6B4D]">
-                        Confirmed
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 3: Outstanding Cheques */}
-                  <tr
-                    className={`transition-colors ${
-                      activeCell.row === 3 ? 'bg-[#E8EEFD]/20' : 'hover:bg-[#F8F9FA]/60'
-                    }`}
-                  >
-                    <td className="px-2 py-3 text-center font-mono-numbers text-[#5B6676] bg-[#F8F9FA] border-r border-[#E3E6EB] font-medium">
-                      3
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(3, 'A')}
-                      className={`px-4 py-3 text-[#1B2430] border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 3 && activeCell.col === 'A'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8]'
-                          : ''
-                      }`}
-                    >
-                      Less: Outstanding cheques (3 items)
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(3, 'B')}
-                      className={`px-4 py-3 font-mono-numbers text-right border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 3 && activeCell.col === 'B'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8] bg-white'
-                          : ''
-                      }`}
-                    >
-                      {formatMoney(-outstandingChequesTotalCents)}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <span className="text-[11px] font-mono-numbers px-2 py-0.5 rounded bg-[#E8EEFD] text-[#1E4FD8]">
-                        Schedule
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 4: Deposits in Transit */}
-                  <tr
-                    className={`transition-colors ${
-                      activeCell.row === 4 ? 'bg-[#E8EEFD]/20' : 'hover:bg-[#F8F9FA]/60'
-                    }`}
-                  >
-                    <td className="px-2 py-3 text-center font-mono-numbers text-[#5B6676] bg-[#F8F9FA] border-r border-[#E3E6EB] font-medium">
-                      4
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(4, 'A')}
-                      className={`px-4 py-3 text-[#1B2430] border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 4 && activeCell.col === 'A'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8]'
-                          : ''
-                      }`}
-                    >
-                      Add: Deposits in transit (Batch REC-0930)
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(4, 'B')}
-                      className={`px-4 py-3 font-mono-numbers text-right border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 4 && activeCell.col === 'B'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8] bg-white'
-                          : ''
-                      }`}
-                    >
-                      {formatMoney(depositsInTransitTotalCents)}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <span className="text-[11px] font-mono-numbers px-2 py-0.5 rounded bg-[#E8EEFD] text-[#1E4FD8]">
-                        Schedule
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 5: Adjusted Bank Balance */}
-                  <tr
-                    className={`bg-[#F8F9FA]/40 font-semibold ${
-                      activeCell.row === 5 ? 'bg-[#E8EEFD]/30' : ''
-                    }`}
-                  >
-                    <td className="px-2 py-3 text-center font-mono-numbers text-[#5B6676] bg-[#F8F9FA] border-r border-[#E3E6EB]">
-                      5
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(5, 'A')}
-                      className={`px-4 py-3 text-[#1B2430] border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 5 && activeCell.col === 'A'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8]'
-                          : ''
-                      }`}
-                    >
-                      Adjusted Bank Balance (Row 2 - Row 3 + Row 4)
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(5, 'B')}
-                      className={`px-4 py-3 font-mono-numbers text-right border-r border-[#E3E6EB] cursor-pointer ${
-                        activeCell.row === 5 && activeCell.col === 'B'
-                          ? 'ring-2 ring-inset ring-[#1E4FD8] bg-white'
-                          : ''
-                      }`}
-                    >
-                      {formatMoney(adjustedBankBalanceCents)}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <span className="text-[11px] font-mono-numbers text-[#5B6676]">
-                        Formula
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 6: Difference with "Ties" pill */}
-                  <tr
-                    className={`font-semibold ${
-                      isTied ? 'bg-[#E2F4EC]/30' : 'bg-[#FFF1DC]/40'
-                    }`}
-                  >
-                    <td className="px-2 py-3 text-center font-mono-numbers text-[#5B6676] bg-[#F8F9FA] border-r border-[#E3E6EB]">
-                      6
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(6, 'A')}
-                      className="px-4 py-3 text-[#1B2430] border-r border-[#E3E6EB]"
-                    >
-                      Unreconciled Difference (Row 1 - Row 5)
-                    </td>
-                    <td
-                      onClick={() => handleCellClick(6, 'B')}
-                      className={`px-4 py-3 font-mono-numbers text-right border-r border-[#E3E6EB] ${
-                        isTied ? 'text-[#0B6B4D]' : 'text-[#9A4A00]'
-                      }`}
-                    >
-                      {formatMoney(differenceCents)}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <StatusPill
-                        status={isTied ? 'Ties' : 'Differs'}
-                        size="sm"
-                      />
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            {/* Attached Section Comments for Grid */}
-            <div className="p-4 bg-white">
-              {renderSectionComments('grid')}
-            </div>
-          </div>
-
-          {/* Section 2: Outstanding Items Table */}
-          <div className="bg-white border border-[#E3E6EB] rounded-[14px] overflow-hidden" id="section-cheques">
-            <div className="px-5 py-3.5 border-b border-[#E3E6EB] flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-sm text-[#1B2430]">
-                  Outstanding Cheques & Items in Transit
-                </h3>
-                <p className="text-xs text-[#5B6676]">
-                  Vouched to subsequent bank statements in October 2026.
-                </p>
-              </div>
-
+      {/* Working Paper Header */}
+      <div className="blynt-card p-5 flex flex-col gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Title & Ref */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="font-mono font-extrabold text-base px-2.5 py-1 rounded bg-[#102654] text-white">
+              {workpaper.ref}
+            </span>
+            <div>
               <div className="flex items-center gap-2">
+                <h1 className="text-lg font-bold text-[#102654] tracking-tight">
+                  {isF10
+                    ? 'Fixed assets: register and depreciation'
+                    : 'Bank reconciliation - Barclays Operating'}
+                </h1>
+                <StatusBadge status={workpaper.status} />
+              </div>
+              <div className="flex items-center gap-3 text-xs text-[#5B6478] mt-1">
+                {/* Template switch dropdown button */}
                 <button
                   type="button"
-                  onClick={() => handleOpenAiCommentModal('cheques')}
-                  className="text-xs font-semibold text-[#3F2A9E] bg-[#F3F0FE] hover:bg-[#eae3fc] px-2.5 py-1 rounded-[8px] border border-[#DDD6FA] flex items-center gap-1.5 transition-colors cursor-pointer"
+                  onClick={() => setShowTemplateModal(true)}
+                  className="font-semibold text-[#102654] hover:text-[#B8432F] flex items-center gap-1 cursor-pointer underline"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-                  <span>+ AI Comment</span>
+                  Template: {template?.name || 'Fixed assets register'} ▾
                 </button>
-
-                {!isLocked && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    icon={<Plus className="w-3.5 h-3.5" />}
-                    onClick={handleAddCheque}
-                  >
-                    Add cheque
-                  </Button>
-                )}
+                <span>•</span>
+                <span>Preparer: <strong>Anika Kapoor</strong></span>
+                <span>•</span>
+                <span>Reviewer: <strong>Sam Rivera</strong></span>
+                <span>•</span>
+                <span className="text-[#0B6B52] font-semibold">
+                  ✓ Saved {savedAgoSeconds}s ago
+                </span>
               </div>
-            </div>
-
-            <div className="overflow-x-auto w-full">
-              <table className="w-full text-left text-xs text-[#1B2430]">
-                <thead className="bg-[#F8F9FA] text-[#5B6676] text-[11px] font-semibold uppercase tracking-wider border-b border-[#E3E6EB]">
-                  <tr>
-                    <th className="px-4 py-2.5">Ref & Date</th>
-                    <th className="px-4 py-2.5">Payee / Description</th>
-                    <th className="px-4 py-2.5 text-right">Amount</th>
-                    <th className="px-4 py-2.5">Audit Tick-Mark Verification</th>
-                    {!isLocked && <th className="px-4 py-2.5 text-right">Action</th>}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E3E6EB]">
-                  {outstandingCheques.map((chk) => (
-                    <tr key={chk.id} className="hover:bg-[#F8F9FA]/60">
-                      <td className="px-4 py-3 font-mono-numbers whitespace-nowrap">
-                        <div className="font-semibold text-[#1E4FD8]">
-                          {chk.reference}
-                        </div>
-                        <div className="text-[11px] text-[#5B6676]">{chk.date}</div>
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-[#1B2430] flex items-center gap-2">
-                          <span>{chk.payee}</span>
-                          {chk.hasReviewNote && (
-                            <span
-                              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-[#FFF1DC] text-[#9A4A00] font-semibold shrink-0"
-                              title={chk.reviewNoteText}
-                            >
-                              <MessageSquare className="w-2.5 h-2.5" />
-                              <span>Review note</span>
-                            </span>
-                          )}
-                        </div>
-                        {chk.clearedSubsequentDate && (
-                          <div className="text-[11px] text-[#0B6B4D] font-mono-numbers mt-0.5">
-                            Cleared bank: {chk.clearedSubsequentDate}
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3 text-right font-mono-numbers font-semibold whitespace-nowrap">
-                        {formatMoney(chk.amountCents)}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#E2F4EC] text-[#0B6B4D] font-medium text-[11px]">
-                          <Check className="w-3 h-3" />
-                          <span>{chk.tickmark}</span>
-                        </span>
-                      </td>
-
-                      {!isLocked && (
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            onClick={() => handleRemoveCheque(chk.id, chk.reference)}
-                            className="p-1 text-[#5B6676] hover:text-[#9A4A00] transition-colors cursor-pointer"
-                            title="Remove item"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-
-                  {/* Deposits in transit */}
-                  {depositsInTransit.map((dep) => (
-                    <tr key={dep.id} className="hover:bg-[#F8F9FA]/60 bg-[#F8F9FA]/20">
-                      <td className="px-4 py-3 font-mono-numbers whitespace-nowrap">
-                        <div className="font-semibold text-[#1E4FD8]">
-                          {dep.reference}
-                        </div>
-                        <div className="text-[11px] text-[#5B6676]">{dep.date}</div>
-                      </td>
-
-                      <td className="px-4 py-3 font-medium text-[#1B2430]">
-                        <div>{dep.description}</div>
-                        <div className="text-[11px] text-[#0B6B4D] font-mono-numbers mt-0.5">
-                          Credited bank: {dep.clearedSubsequentDate}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3 text-right font-mono-numbers font-semibold whitespace-nowrap">
-                        {formatMoney(dep.amountCents)}
-                      </td>
-
-                      <td className="px-4 py-3" colSpan={isLocked ? 1 : 2}>
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#E2F4EC] text-[#0B6B4D] font-medium text-[11px]">
-                          <Check className="w-3 h-3" />
-                          <span>{dep.tickmark}</span>
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Attached Section Comments for Cheques & Deposits */}
-            <div className="p-4 bg-white">
-              {renderSectionComments('cheques')}
-              {renderSectionComments('deposits')}
             </div>
           </div>
 
-          {/* Section 3: Procedures Checklist */}
-          <div className="bg-white border border-[#E3E6EB] rounded-[14px] p-5" id="section-procedures">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-sm text-[#1B2430]">
-                Standard Audit Procedures (ISA 500 & ISA 505)
-              </h3>
-              <button
-                type="button"
-                onClick={() => handleOpenAiCommentModal('procedures')}
-                className="text-xs font-semibold text-[#3F2A9E] bg-[#F3F0FE] hover:bg-[#eae3fc] px-2.5 py-1 rounded-[8px] border border-[#DDD6FA] flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-                <span>+ AI Comment</span>
-              </button>
-            </div>
+          {/* Action Toolbar */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Comment Anywhere (Key C) */}
+            <button
+              type="button"
+              onClick={() => setCommentMode(!commentMode)}
+              className={`min-h-[40px] px-3 text-xs font-semibold rounded-[8px] flex items-center gap-1.5 transition-colors cursor-pointer ${
+                commentMode
+                  ? 'bg-[#FF7D6B] text-[#0B1B3D] font-bold shadow-xs'
+                  : 'bg-white border border-[#D5DBE7] hover:border-[#102654] text-[#102654]'
+              }`}
+              title="Comment anywhere (C)"
+            >
+              <MessageSquare className="w-4 h-4 text-inherit" />
+              <span>Comment anywhere</span>
+              <kbd className="text-[10px] font-mono px-1 rounded bg-black/10">C</kbd>
+            </button>
 
-            <div className="flex flex-col gap-3">
+            {/* Attach File */}
+            <button
+              type="button"
+              onClick={() => setActiveSideTab('evidence')}
+              className="min-h-[40px] px-3 bg-white border border-[#D5DBE7] hover:border-[#102654] text-[#102654] text-xs font-semibold rounded-[8px] flex items-center gap-1.5 cursor-pointer"
+            >
+              <Paperclip className="w-4 h-4" />
+              <span>Attach file</span>
+              <kbd className="text-[10px] font-mono px-1 rounded bg-black/5">A</kbd>
+            </button>
+
+            {/* Customise View */}
+            <button
+              type="button"
+              onClick={() => setShowCustomiseModal(true)}
+              className="min-h-[40px] px-3 bg-white border border-[#D5DBE7] hover:border-[#102654] text-[#102654] text-xs font-semibold rounded-[8px] flex items-center gap-1.5 cursor-pointer"
+            >
+              <Sliders className="w-4 h-4" />
+              <span>Customise view</span>
+            </button>
+
+            {/* Focus Mode */}
+            <button
+              type="button"
+              onClick={() => setFocusMode(!focusMode)}
+              className={`min-h-[40px] px-3 text-xs font-semibold rounded-[8px] flex items-center gap-1.5 transition-colors cursor-pointer ${
+                focusMode
+                  ? 'bg-[#102654] text-white'
+                  : 'bg-white border border-[#D5DBE7] hover:border-[#102654] text-[#102654]'
+              }`}
+              title="Focus mode (F)"
+            >
+              {focusMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              <span>{focusMode ? 'Exit focus' : 'Focus mode'}</span>
+              <kbd className="text-[10px] font-mono px-1 rounded bg-black/10">F</kbd>
+            </button>
+
+            {/* Prev / Next Paper */}
+            <div className="flex items-center border border-[#D5DBE7] rounded-[8px] overflow-hidden bg-white">
+              <Link
+                href={`/engagements/${engagementId}/workpapers/wp_b10`}
+                title="Previous paper ([)"
+                className="p-2 hover:bg-[#F6F7FB] text-[#102654] border-r border-[#D5DBE7]"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Link>
+              <Link
+                href={`/engagements/${engagementId}/workpapers/wp_f10`}
+                title="Next paper (])"
+                className="p-2 hover:bg-[#F6F7FB] text-[#102654]"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* 8-Parts Jump Bar */}
+        <nav
+          aria-label="Parts navigation"
+          className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-[#E3E7EF] text-xs"
+        >
+          {[
+            { num: 1, name: 'Objective', badge: '✓ Done' },
+            { num: 2, name: 'Lead figures', badge: 'TB 1500' },
+            { num: 3, name: 'Schedule', badge: '£6,400.00 NBV' },
+            { num: 4, name: 'Checks', badge: disposalEvidenceMissing ? '! 1 Warning' : '✓ Passed' },
+            { num: 5, name: 'Procedures', badge: `${procedures.filter((p) => p.done_at).length}/${procedures.length}` },
+            { num: 6, name: 'Evidence', badge: `${attachments.length} files` },
+            { num: 7, name: 'Conclusion', badge: 'Drafted' },
+            { num: 8, name: 'Sign-off', badge: workpaper.status },
+          ].map((part) => (
+            <a
+              key={part.num}
+              href={`#part-${part.num}`}
+              className="px-2.5 py-1.5 rounded-[8px] bg-[#F6F7FB] hover:bg-[#EAF5FC] text-[#102654] hover:text-[#1D4E89] font-medium shrink-0 flex items-center gap-1.5 transition-colors border border-[#E3E7EF]"
+            >
+              <span className="font-bold text-[10px] text-[#5B6478]">
+                {part.num}
+              </span>
+              <span>{part.name}</span>
+              <span className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-white text-[#5B6478] border border-[#D5DBE7]">
+                {part.badge}
+              </span>
+            </a>
+          ))}
+        </nav>
+      </div>
+
+      {/* Selected Cell Formula & Source Bar */}
+      <div className="blynt-card p-3 bg-[#F6F7FB] border border-[#D5DBE7] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono-numbers">
+        <div className="flex items-center gap-3">
+          <span className="px-2 py-0.5 rounded bg-[#102654] text-white font-mono font-bold text-[11px]">
+            {selectedCell.ref}
+          </span>
+          <span className="font-bold text-[#102654]">{selectedCell.label}:</span>
+          <span className="text-sm font-extrabold text-[#102654]">{selectedCell.value}</span>
+        </div>
+        <div className="flex items-center gap-3 text-[#5B6478]">
+          <span>Source: <strong className="text-[#102654]">{selectedCell.source}</strong></span>
+          <span>•</span>
+          <span>Accepted by: <strong className="text-[#102654]">{selectedCell.acceptedBy}</strong></span>
+        </div>
+      </div>
+
+      {/* Main Grid: Working Paper Core (8 Parts) + Side Panel Tabs */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: 8 Parts */}
+        <div className="lg:col-span-8 flex flex-col gap-6">
+          {/* Part 1: Objective */}
+          <details
+            id="part-1"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  1
+                </span>
+                <span>Objective</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E6F4EF] text-[#0B6B52]">
+                ✓ Complete
+              </span>
+            </summary>
+            <div className="pt-3 text-xs text-[#5B6478] leading-relaxed border-t border-[#E3E7EF] mt-3">
+              {data.objective ||
+                'To test the existence, ownership, and valuation of tangible fixed assets, verify depreciation calculations according to disclosed accounting policy, and vouch additions and disposals.'}
+            </div>
+          </details>
+
+          {/* Part 2: Lead Figures (From Blynt Codes) */}
+          <details
+            id="part-2"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  2
+                </span>
+                <span>Lead Figures (from Blynt codes)</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EAF5FC] text-[#1D4E89]">
+                Tied to Trial Balance
+              </span>
+            </summary>
+            <div className="pt-3 border-t border-[#E3E7EF] mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono-numbers">
+              <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                <div className="text-[10px] font-bold uppercase text-[#5B6478]">TB 1500 (Cost)</div>
+                <div className="text-sm font-extrabold text-[#102654] mt-0.5">
+                  {formatPence(totalClosingCost)}
+                </div>
+                <div className="text-[9px] text-[#0B6B52] mt-0.5 font-bold">✓ Agrees to TB</div>
+              </div>
+
+              <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                <div className="text-[10px] font-bold uppercase text-[#5B6478]">TB 1700 (Deprec)</div>
+                <div className="text-sm font-extrabold text-[#102654] mt-0.5">
+                  {formatPence(totalClosingDeprec)}
+                </div>
+                <div className="text-[9px] text-[#0B6B52] mt-0.5 font-bold">✓ Agrees to TB</div>
+              </div>
+
+              <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                <div className="text-[10px] font-bold uppercase text-[#5B6478]">TB 6900 (Charge)</div>
+                <div className="text-sm font-extrabold text-[#102654] mt-0.5">
+                  {formatPence(totalCharge)}
+                </div>
+                <div className="text-[9px] text-[#0B6B52] mt-0.5 font-bold">✓ Agrees to TB</div>
+              </div>
+
+              <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                <div className="text-[10px] font-bold uppercase text-[#5B6478]">TB 6950 (Disposal)</div>
+                <div className="text-sm font-extrabold text-[#102654] mt-0.5">
+                  {formatPence(disposalLoss)}
+                </div>
+                <div className="text-[9px] text-[#0B6B52] mt-0.5 font-bold">✓ Loss agreed</div>
+              </div>
+            </div>
+          </details>
+
+          {/* Part 3: Schedule Grid (Reference Implementation F-10) */}
+          <details
+            id="part-3"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  3
+                </span>
+                <span>Schedule: Tangible Assets Movement &amp; Depreciation</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E6F4EF] text-[#0B6B52]">
+                NBV £6,400.00
+              </span>
+            </summary>
+
+            <div className="pt-4 border-t border-[#E3E7EF] mt-3 flex flex-col gap-6">
+              {/* Asset Class Movements Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-[#102654]">
+                  <thead className="bg-[#F6F7FB] text-[#5B6478] uppercase text-[10px] font-bold tracking-wider border-b border-[#E3E7EF]">
+                    <tr>
+                      <th scope="col" className="p-2.5">Asset Class</th>
+                      <th scope="col" className="p-2.5 text-right">Cost Opening</th>
+                      <th scope="col" className="p-2.5 text-right">Additions</th>
+                      <th scope="col" className="p-2.5 text-right">Disposals</th>
+                      <th scope="col" className="p-2.5 text-right font-bold">Cost Closing</th>
+                      <th scope="col" className="p-2.5 text-right">Deprec Opening</th>
+                      <th scope="col" className="p-2.5 text-right">Charge</th>
+                      <th scope="col" className="p-2.5 text-right font-bold">Deprec Closing</th>
+                      <th scope="col" className="p-2.5 text-right font-bold text-[#102654]">NBV This Year</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E3E7EF] font-mono-numbers">
+                    {/* Computer Equipment Row */}
+                    <tr
+                      className={`hover:bg-[#F6F7FB] cursor-pointer ${
+                        commentMode ? 'outline-2 outline-dashed outline-[#FF7D6B]' : ''
+                      }`}
+                      onClick={() => {
+                        setSelectedCell({
+                          ref: 'F10-C1-ADD',
+                          label: 'Computer equipment additions',
+                          value: '£2,400.00',
+                          source: 'Invoice INV-DELL-9811',
+                          acceptedBy: 'Anika Kapoor',
+                        });
+                        if (commentMode) {
+                          setShowCommentComposer(true);
+                          setCommentAnchor({ kind: 'row', table: 'schedule', row: 'computer' });
+                        }
+                      }}
+                    >
+                      <td className="p-2.5 font-bold font-sans text-[#102654]">
+                        Computer equipment
+                        <span className="block text-[9px] font-normal text-[#5B6478]">25% Straight line</span>
+                      </td>
+                      <td className="p-2.5 text-right">
+                        <span className="inline-flex items-center gap-1">
+                          {formatPence(computer?.cost_opening_p || '600000')}
+                          <span className="text-[9px] font-bold bg-[#EAF5FC] text-[#1D4E89] px-1 rounded">PY</span>
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right text-[#1D4E89] font-bold">
+                        {formatPence(computer?.cost_additions_p || '240000')}
+                      </td>
+                      <td className="p-2.5 text-right text-[#B42318]">
+                        -{formatPence(computer?.cost_disposals_p || '120000')}
+                      </td>
+                      <td className="p-2.5 text-right font-bold text-[#102654]">
+                        {formatPence(compCostClosing)}
+                      </td>
+                      <td className="p-2.5 text-right">
+                        <span className="inline-flex items-center gap-1">
+                          {formatPence(computer?.deprec_opening_p || '250000')}
+                          <span className="text-[9px] font-bold bg-[#EAF5FC] text-[#1D4E89] px-1 rounded">PY</span>
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right">
+                        {formatPence(computer?.deprec_charge_p || '180000')}
+                      </td>
+                      <td className="p-2.5 text-right font-bold text-[#102654]">
+                        {formatPence(compDeprecClosing)}
+                      </td>
+                      <td className="p-2.5 text-right font-extrabold text-[#0B6B52]">
+                        {formatPence(compCostClosing - compDeprecClosing)}
+                      </td>
+                    </tr>
+
+                    {/* Fixtures Row */}
+                    <tr
+                      className="hover:bg-[#F6F7FB] cursor-pointer"
+                      onClick={() => {
+                        setSelectedCell({
+                          ref: 'F10-C2-COST',
+                          label: 'Fixtures & fittings cost',
+                          value: '£4,500.00',
+                          source: 'TB 1500',
+                          acceptedBy: 'Anika Kapoor',
+                        });
+                      }}
+                    >
+                      <td className="p-2.5 font-bold font-sans text-[#102654]">
+                        Fixtures &amp; fittings
+                        <span className="block text-[9px] font-normal text-[#5B6478]">20% Straight line</span>
+                      </td>
+                      <td className="p-2.5 text-right">
+                        <span className="inline-flex items-center gap-1">
+                          {formatPence(fixtures?.cost_opening_p || '450000')}
+                          <span className="text-[9px] font-bold bg-[#EAF5FC] text-[#1D4E89] px-1 rounded">PY</span>
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right">£0.00</td>
+                      <td className="p-2.5 text-right">£0.00</td>
+                      <td className="p-2.5 text-right font-bold text-[#102654]">
+                        {formatPence(fixCostClosing)}
+                      </td>
+                      <td className="p-2.5 text-right">
+                        <span className="inline-flex items-center gap-1">
+                          {formatPence(fixtures?.deprec_opening_p || '90000')}
+                          <span className="text-[9px] font-bold bg-[#EAF5FC] text-[#1D4E89] px-1 rounded">PY</span>
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right">
+                        {formatPence(fixtures?.deprec_charge_p || '90000')}
+                      </td>
+                      <td className="p-2.5 text-right font-bold text-[#102654]">
+                        {formatPence(fixDeprecClosing)}
+                      </td>
+                      <td className="p-2.5 text-right font-extrabold text-[#0B6B52]">
+                        {formatPence(fixCostClosing - fixDeprecClosing)}
+                      </td>
+                    </tr>
+
+                    {/* Total Row */}
+                    <tr className="bg-[#F6F7FB] font-bold border-t-2 border-[#102654]">
+                      <td className="p-2.5 font-sans">Total Tangible Assets</td>
+                      <td className="p-2.5 text-right">
+                        {formatPence(1050000n)}
+                      </td>
+                      <td className="p-2.5 text-right text-[#1D4E89]">
+                        +{formatPence(240000n)}
+                      </td>
+                      <td className="p-2.5 text-right text-[#B42318]">
+                        -{formatPence(120000n)}
+                      </td>
+                      <td className="p-2.5 text-right text-[#102654]">
+                        {formatPence(totalClosingCost)}
+                      </td>
+                      <td className="p-2.5 text-right">
+                        {formatPence(340000n)}
+                      </td>
+                      <td className="p-2.5 text-right text-[#102654]">
+                        {formatPence(totalCharge)}
+                      </td>
+                      <td className="p-2.5 text-right text-[#102654]">
+                        {formatPence(totalClosingDeprec)}
+                      </td>
+                      <td className="p-2.5 text-right text-sm text-[#0B6B52]">
+                        {formatPence(totalNbvThisYear)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Additions Table with Invoice Evidence Link */}
+              <div className="border border-[#E3E7EF] rounded-[12px] p-4 bg-white">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-bold text-[#102654]">
+                    Additions in Period (&gt; £1,000 threshold vouched to invoice)
+                  </h4>
+                  <span className="text-[10px] font-mono text-[#0B6B52] bg-[#E6F4EF] px-2 py-0.5 rounded font-bold">
+                    ✓ Invoice verified
+                  </span>
+                </div>
+                <div className="overflow-x-auto text-xs font-mono-numbers">
+                  <table className="w-full text-left">
+                    <thead className="bg-[#F6F7FB] text-[#5B6478] text-[10px] font-bold uppercase">
+                      <tr>
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Item Description</th>
+                        <th className="p-2">Supplier</th>
+                        <th className="p-2 text-right">Cost</th>
+                        <th className="p-2">Supporting Invoice</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E3E7EF]">
+                      <tr>
+                        <td className="p-2 font-mono">2026-03-15</td>
+                        <td className="p-2 font-sans font-semibold">Dell PowerEdge R750 Server &amp; Workstations</td>
+                        <td className="p-2 font-sans">Dell Technologies UK</td>
+                        <td className="p-2 text-right font-bold text-[#1D4E89]">£2,400.00</td>
+                        <td className="p-2 font-sans">
+                          <button
+                            type="button"
+                            onClick={() => setActiveSideTab('evidence')}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold text-[#B8432F] hover:underline"
+                          >
+                            <Paperclip className="w-3.5 h-3.5" />
+                            <span>Dell_PowerEdge_Invoice_9811.pdf</span>
+                          </button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Disposals Table with Proceeds Evidence Alert */}
+              <div className="border border-[#E3E7EF] rounded-[12px] p-4 bg-white">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-bold text-[#102654]">
+                    Disposals in Period (Proceeds &amp; Loss Calculation)
+                  </h4>
+                  <span className="text-[10px] font-mono text-[#B42318] bg-[#FDECEA] px-2 py-0.5 rounded font-bold">
+                    ! Missing proceeds evidence
+                  </span>
+                </div>
+                <div className="overflow-x-auto text-xs font-mono-numbers">
+                  <table className="w-full text-left">
+                    <thead className="bg-[#F6F7FB] text-[#5B6478] text-[10px] font-bold uppercase">
+                      <tr>
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Asset Item</th>
+                        <th className="p-2 text-right">Cost Out</th>
+                        <th className="p-2 text-right">Deprec Out</th>
+                        <th className="p-2 text-right">NBV Out</th>
+                        <th className="p-2 text-right">Proceeds</th>
+                        <th className="p-2 text-right font-bold text-[#B42318]">Loss on Disposal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E3E7EF]">
+                      <tr>
+                        <td className="p-2 font-mono">2026-06-20</td>
+                        <td className="p-2 font-sans font-semibold">Legacy Apple iMac Workstations (x2)</td>
+                        <td className="p-2 text-right">£1,200.00</td>
+                        <td className="p-2 text-right">£800.00</td>
+                        <td className="p-2 text-right">£400.00</td>
+                        <td className="p-2 text-right">£250.00</td>
+                        <td className="p-2 text-right font-bold text-[#B42318]">£150.00</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          {/* Part 4: Checks (Evaluated from rules) */}
+          <details
+            id="part-4"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  4
+                </span>
+                <span>Checks &amp; Mathematical Verification</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFF4DB] text-[#6B4700]">
+                ⚠ 1 warning requires explanation
+              </span>
+            </summary>
+
+            <div className="pt-4 border-t border-[#E3E7EF] mt-3 flex flex-col gap-3 text-xs">
+              <div className="p-3 bg-[#E6F4EF] rounded-[10px] border border-[#0B6B52]/20 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-[#0B6B52]" />
+                  <div>
+                    <div className="font-bold text-[#102654]">Closing Cost Agrees to TB 1500</div>
+                    <div className="text-[10px] text-[#5B6478] font-mono">
+                      Schedule £11,700.00 == TB Account 1500 £11,700.00 (Variance: £0.00)
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[#0B6B52] font-bold text-xs">Pass</span>
+              </div>
+
+              <div className="p-3 bg-[#E6F4EF] rounded-[10px] border border-[#0B6B52]/20 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-[#0B6B52]" />
+                  <div>
+                    <div className="font-bold text-[#102654]">Closing Depreciation Agrees to TB 1700</div>
+                    <div className="text-[10px] text-[#5B6478] font-mono">
+                      Schedule £5,300.00 == TB Account 1700 £5,300.00 (Variance: £0.00)
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[#0B6B52] font-bold text-xs">Pass</span>
+              </div>
+
+              <div className="p-3 bg-[#E6F4EF] rounded-[10px] border border-[#0B6B52]/20 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-[#0B6B52]" />
+                  <div>
+                    <div className="font-bold text-[#102654]">Proof in Total Depreciation Check</div>
+                    <div className="text-[10px] text-[#5B6478] font-mono">
+                      Expected from Policy: £2,700.00 == Actual Charge £2,700.00 (Variance: £0.00)
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[#0B6B52] font-bold text-xs">Pass</span>
+              </div>
+
+              {/* Failing Check */}
+              <div className="p-3 bg-[#FDECEA] rounded-[10px] border border-[#B42318]/30 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-[#B42318]" />
+                  <div>
+                    <div className="font-bold text-[#B42318]">Disposal Proceeds Evidence</div>
+                    <div className="text-[10px] text-[#5B6478]">
+                      Disposal of Legacy Apple iMacs (£250.00 proceeds) does not have bank statement confirmation attached.
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[#B42318] font-bold text-xs">Needs attention</span>
+              </div>
+            </div>
+          </details>
+
+          {/* Part 5: Procedures */}
+          <details
+            id="part-5"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  5
+                </span>
+                <span>Procedures (Audit Checklist)</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EAF5FC] text-[#1D4E89]">
+                {procedures.filter((p) => p.done_at).length} of {procedures.length} Done
+              </span>
+            </summary>
+
+            <div className="pt-4 border-t border-[#E3E7EF] mt-3 flex flex-col gap-2.5 text-xs">
               {procedures.map((proc) => {
-                const isDone = proc.status === 'Done';
+                const isDone = !!proc.done_at;
                 return (
                   <div
                     key={proc.id}
                     onClick={() => handleToggleProcedure(proc.id)}
-                    className={`p-3 rounded-[10px] border transition-colors flex items-start gap-3 cursor-pointer ${
+                    className={`p-3 rounded-[10px] border transition-all cursor-pointer flex items-center justify-between ${
                       isDone
-                        ? 'border-[#0B6B4D]/30 bg-[#E2F4EC]/10'
-                        : 'border-[#E3E6EB] bg-white'
+                        ? 'bg-[#E6F4EF]/40 border-[#0B6B52]/20'
+                        : 'bg-white border-[#E3E7EF] hover:border-[#102654]'
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={isDone}
-                      disabled={isLocked}
-                      onChange={() => handleToggleProcedure(proc.id)}
-                      className="w-4 h-4 rounded text-[#1E4FD8] border-[#D5D9E0] focus:ring-[#1E4FD8] mt-0.5"
-                    />
-                    <div className="flex flex-col gap-0.5 flex-1">
-                      <span className="text-xs font-semibold text-[#1B2430]">
-                        {proc.title}
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={isDone}
+                        onChange={() => handleToggleProcedure(proc.id)}
+                        className="w-4 h-4 rounded text-[#102654] focus:ring-[#FF7D6B]"
+                      />
+                      <span className={`font-medium ${isDone ? 'text-[#102654]' : 'text-[#102654]'}`}>
+                        {proc.text}
                       </span>
-                      <span className="text-xs text-[#5B6676] leading-relaxed">
-                        {proc.description}
-                      </span>
-                      {proc.completedBy && (
-                        <span className="text-[10px] text-[#0B6B4D] font-mono-numbers mt-1 flex items-center gap-1">
-                          <Check className="w-3 h-3" />
-                          <span>
-                            Verified by {proc.completedBy} ({proc.completedAt})
-                          </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isDone ? (
+                        <span className="text-[10px] font-mono text-[#0B6B52]">
+                          ✓ Done by Anika
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-[#5B6478]">
+                          Pending
                         </span>
                       )}
                     </div>
@@ -1237,484 +905,568 @@ export default function WorkpaperEditorPage() {
                 );
               })}
             </div>
+          </details>
 
-            {/* Attached Section Comments for Procedures */}
-            {renderSectionComments('procedures')}
-          </div>
-
-          {/* Section 4: Conclusion Textarea */}
-          <div className="bg-white border border-[#E3E6EB] rounded-[14px] p-5 flex flex-col gap-3" id="section-conclusion">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-sm text-[#1B2430]">
-                  Auditor Substantive Conclusion
-                </h3>
-                <p className="text-xs text-[#5B6676]">
-                  ISA 500 documented conclusion for the engagement review file.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleOpenAiCommentModal('conclusion')}
-                  className="text-xs font-semibold text-[#3F2A9E] bg-[#F3F0FE] hover:bg-[#eae3fc] px-2.5 py-1 rounded-[8px] border border-[#DDD6FA] flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-                  <span>+ AI Comment</span>
-                </button>
-
-                {!isLocked && (
-                  <Button
-                    variant="ai"
-                    size="sm"
-                    icon={<Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />}
-                    onClick={handleApplyAiConclusion}
-                  >
-                    Draft from my results
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <textarea
-              rows={4}
-              value={conclusionText}
-              disabled={isLocked}
-              onChange={(e) => setConclusionText(e.target.value)}
-              placeholder="State the audit conclusion based on substantive procedures performed..."
-              className="w-full p-3 text-xs leading-relaxed border border-[#D5D9E0] rounded-[10px] bg-white text-[#1B2430] focus-visible:outline-2 focus-visible:outline-[#1E4FD8] focus-visible:outline-offset-2 disabled:bg-[#F4F5F7] disabled:text-[#5B6676]"
-            />
-
-            {/* Attached Section Comments for Conclusion */}
-            {renderSectionComments('conclusion')}
-          </div>
-        </div>
-
-        {/* RIGHT COLUMN: Evidence Viewer + Violet AI Assistant Card + Review Notes Thread */}
-        <div className="lg:col-span-5 flex flex-col gap-6">
-          {/* Section 5: Evidence Viewer Card */}
-          <div className="bg-white border border-[#E3E6EB] rounded-[14px] overflow-hidden" id="section-evidence">
-            <div className="px-5 py-3.5 border-b border-[#E3E6EB] flex items-center justify-between bg-[#F8F9FA]">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-[#1E4FD8]" />
-                <span className="font-semibold text-xs text-[#1B2430]">
-                  Evidence Viewer • Barclays Operating Statement
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleOpenAiCommentModal('evidence')}
-                  className="text-xs font-semibold text-[#3F2A9E] bg-white hover:bg-[#F3F0FE] px-2 py-0.5 rounded-[6px] border border-[#DDD6FA] flex items-center gap-1 transition-colors cursor-pointer"
-                >
-                  <Sparkles className="w-3 h-3 text-[#5B3FD0]" />
-                  <span>+ AI Comment</span>
-                </button>
-                <span className="text-[11px] font-mono-numbers px-2 py-0.5 rounded bg-white border border-[#D5D9E0] text-[#5B6676]">
-                  Page 1 of 4
-                </span>
-              </div>
-            </div>
-
-            {/* Document Render Mock */}
-            <div className="p-5 bg-[#F4F5F7] text-xs font-mono-numbers flex flex-col gap-4">
-              <div className="bg-white p-5 rounded-[10px] border border-[#D5D9E0] shadow-xs flex flex-col gap-3">
-                <div className="flex items-start justify-between border-b border-[#E3E6EB] pb-3 font-sans">
-                  <div>
-                    <div className="font-bold text-sm text-[#1B2430]">BARCLAYS BANK PLC</div>
-                    <div className="text-[11px] text-[#5B6676]">1 Churchill Place, London E14 5HP</div>
-                  </div>
-                  <div className="text-right text-[11px]">
-                    <div className="font-semibold text-[#1B2430]">Harlow & Finch Ltd</div>
-                    <div className="text-[#5B6676]">Account # 4088-2910-1010</div>
-                  </div>
-                </div>
-
-                <div className="py-2 text-[11px] text-[#5B6676]">
-                  STATEMENT PERIOD: 01 SEP 2026 – 30 SEP 2026
-                </div>
-
-                <div className="flex flex-col gap-2 font-mono">
-                  <div className="flex justify-between py-1 border-b border-[#E3E6EB]/50">
-                    <span>OPENING BALANCE AT 01 SEP 2026</span>
-                    <span>$98,420.00</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#E3E6EB]/50 text-[#5B6676]">
-                    <span>TOTAL CREDITS & DEPOSITS</span>
-                    <span>+$241,520.17</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#E3E6EB]/50 text-[#5B6676]">
-                    <span>TOTAL CHARGES & CHEQUES DRAWN</span>
-                    <span>-$215,022.00</span>
-                  </div>
-
-                  {/* Highlighted Closing Balance matching B2 */}
-                  <div className="flex justify-between items-center p-2 rounded-[8px] bg-[#E8EEFD] border border-[#1E4FD8] font-bold text-[#1E4FD8] my-1">
-                    <span>CLOSING BALANCE AT 30 SEP 2026</span>
-                    <span className="text-sm font-mono-numbers">$124,918.17</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-2 border-t border-[#E3E6EB] text-[11px] font-sans">
-                  <span className="inline-flex items-center gap-1.5 text-[#0B6B4D] font-semibold bg-[#E2F4EC] px-2.5 py-1 rounded-full">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Agrees to statement ($124,918.17)</span>
-                  </span>
-                  <span className="text-[#5B6676]">Confirmed via Barclays Direct</span>
-                </div>
-              </div>
-
-              {renderSectionComments('evidence')}
-            </div>
-          </div>
-
-          {/* Section 6: Violet AI Assistant Card */}
-          <AiCard
-            title="AI Extraction Lineage & Provenance"
-            badge="Verified Lineage"
+          {/* Part 6: Attachments & Evidence */}
+          <details
+            id="part-6"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
           >
-            <div className="flex flex-col gap-2.5 text-xs text-[#3F2A9E]">
-              <div className="grid grid-cols-2 gap-2 bg-white/70 p-3 rounded-[10px] border border-[#DDD6FA]">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-[#5B3FD0] block">
-                    Source File
-                  </span>
-                  <span className="font-semibold text-[#1B2430] truncate block">
-                    Barclays_Sept2026.pdf
-                  </span>
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  6
+                </span>
+                <span>Attachments &amp; Evidence</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EAF5FC] text-[#1D4E89]">
+                {attachments.length} files
+              </span>
+            </summary>
+
+            <div className="pt-4 border-t border-[#E3E7EF] mt-3 flex flex-col gap-3">
+              {attachments.map((att) => (
+                <div
+                  key={att.id}
+                  className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] flex items-center justify-between text-xs"
+                >
+                  <div className="flex items-center gap-3">
+                    <Paperclip className="w-4 h-4 text-[#102654]" />
+                    <div>
+                      <div className="font-bold text-[#102654]">{att.filename}</div>
+                      <div className="text-[10px] text-[#5B6478] font-mono">
+                        SHA-256: {att.sha256.substring(0, 16)}... • {att.category} • Uploaded by {att.uploaded_by_name}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveSideTab('evidence')}
+                    className="text-xs font-bold text-[#B8432F] hover:underline"
+                  >
+                    Preview evidence →
+                  </button>
                 </div>
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-[#5B3FD0] block">
-                    Location
-                  </span>
-                  <span className="font-semibold text-[#1B2430] block">
-                    Page 1, Closing Summary
-                  </span>
-                </div>
+              ))}
+            </div>
+          </details>
+
+          {/* Part 7: Conclusion (Blynt Bot Draft) */}
+          <details
+            id="part-7"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  7
+                </span>
+                <span>Conclusion &amp; Audit Opinion</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E6F4EF] text-[#0B6B52]">
+                Drafted
+              </span>
+            </summary>
+
+            <div className="pt-4 border-t border-[#E3E7EF] mt-3 flex flex-col gap-4 text-xs">
+              <div className="p-3.5 bg-white border border-[#D5DBE7] rounded-[10px] text-[#102654] leading-relaxed">
+                {data.conclusion?.text ||
+                  'Substantive audit testing of tangible fixed assets was completed in accordance with FRS 102 section 17. Additions were vouched to supplier invoice. Proof in total confirms depreciation charge of £2,700.00 is mathematically sound.'}
               </div>
 
-              <div className="grid grid-cols-2 gap-2 bg-white/70 p-3 rounded-[10px] border border-[#DDD6FA]">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-[#5B3FD0] block">
-                    Prompt Version
-                  </span>
-                  <span className="font-mono-numbers text-[#1B2430] block">
-                    v2.4-bank-extract
-                  </span>
+              {/* Blynt Bot Draft in labelled box */}
+              <div className="p-4 bg-[#FFF1EE] border border-[#FF7D6B]/40 rounded-[12px]">
+                <div className="font-bold text-[#A23A27] flex items-center gap-1.5 mb-1.5">
+                  <Sparkles className="w-4 h-4" />
+                  <span>✦ suggestion: Blynt Bot Conclusion Draft</span>
                 </div>
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-[#5B3FD0] block">
-                    Extraction Confidence
-                  </span>
-                  <span className="font-mono-numbers text-[#0B6B4D] font-semibold block">
-                    99.4% (Exact Match)
-                  </span>
+                <p className="text-[#102654] leading-relaxed">
+                  {data.conclusion?.ai_draft ||
+                    '✦ suggestion: Additions of £2,400.00 vouched to invoice. Proof in total agrees to depreciation charge of £2,700.00. Outstanding item: obtain bank credit evidence for £250.00 disposal proceeds.'}
+                </p>
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      data.conclusion.text = data.conclusion.ai_draft.replace('✦ suggestion: ', '');
+                      setWpData({ ...wpData });
+                      setLiveAnnouncement('AI suggestion applied to conclusion.');
+                    }}
+                    className="px-3 py-1 bg-[#102654] hover:bg-[#0B1B3D] text-white font-bold text-xs rounded-[6px]"
+                  >
+                    Use suggestion
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-1 bg-white border border-[#D5DBE7] text-[#5B6478] rounded-[6px]"
+                  >
+                    Edit first
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-[#5B6478] hover:text-[#102654]"
+                  >
+                    Dismiss
+                  </button>
                 </div>
-              </div>
-
-              <div className="p-2.5 rounded-[8px] bg-white/90 border border-[#DDD6FA] text-[11px] text-[#3F2A9E]">
-                <strong>Auditor Verification</strong>: Accepted by Sam Rivera on 02 Oct 2026. Under ISA standards, AI never signs off; final judgment resides with the engagement team.
               </div>
             </div>
-          </AiCard>
+          </details>
 
-          {/* Section 7: Review Notes Thread with Reply Box */}
-          <div className="bg-white border border-[#E3E6EB] rounded-[14px] p-5 flex flex-col gap-4" id="section-notes">
-            <div className="flex items-center justify-between pb-3 border-b border-[#E3E6EB]">
+          {/* Part 8: Sign-off Bar */}
+          <details
+            id="part-8"
+            open
+            className="blynt-card p-5 group open:pb-6 transition-all"
+          >
+            <summary className="flex items-center justify-between cursor-pointer font-bold text-sm text-[#102654] select-none">
               <div className="flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-[#9A4A00]" />
-                <h3 className="font-semibold text-sm text-[#1B2430]">
-                  Review Notes Thread ({reviewNotes.length})
-                </h3>
+                <span className="w-5 h-5 rounded-full bg-[#102654] text-white text-[10px] flex items-center justify-center font-bold">
+                  8
+                </span>
+                <span>Sign-off Bar (Preparer → Reviewer → Partner)</span>
               </div>
-              <div className="flex items-center gap-2">
+              <StatusBadge status={workpaper.status} />
+            </summary>
+
+            <div className="pt-4 border-t border-[#E3E7EF] mt-3 flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                {/* Preparer Stage */}
+                <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                  <div className="text-[10px] font-bold uppercase text-[#5B6478]">1. Preparer</div>
+                  <div className="font-bold text-[#102654] mt-1">Anika Kapoor</div>
+                  <div className="text-[10px] text-[#0B6B52] font-semibold mt-0.5">
+                    {workpaper.status === 'prepared' || workpaper.status === 'signed_off'
+                      ? '✓ Prepared'
+                      : 'In progress'}
+                  </div>
+                </div>
+
+                {/* Reviewer Stage */}
+                <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                  <div className="text-[10px] font-bold uppercase text-[#5B6478]">2. Reviewer</div>
+                  <div className="font-bold text-[#102654] mt-1">Sam Rivera</div>
+                  <div className="text-[10px] text-[#5B6478] mt-0.5">
+                    {signoffs.some((s) => s.role === 'reviewer' && !s.stale_at)
+                      ? '✓ Reviewed'
+                      : 'Pending review'}
+                  </div>
+                </div>
+
+                {/* Partner Stage */}
+                <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF]">
+                  <div className="text-[10px] font-bold uppercase text-[#5B6478]">3. Partner</div>
+                  <div className="font-bold text-[#102654] mt-1">Priya Lal</div>
+                  <div className="text-[10px] text-[#5B6478] mt-0.5">Awaiting partner lock</div>
+                </div>
+              </div>
+
+              {/* Action Button: Disabled with reason until done */}
+              <div className="flex items-center justify-between pt-2">
+                <div className="text-xs text-[#5B6478]">
+                  {!canMarkPrepared ? (
+                    <span className="text-[#B42318] font-bold">
+                      Cannot sign off: {incompleteProceduresCount} incomplete procedures, {openReviewNotes.length} open review notes.
+                    </span>
+                  ) : (
+                    <span className="text-[#0B6B52] font-bold">
+                      ✓ All checks and procedures passed. Ready for sign-off.
+                    </span>
+                  )}
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => handleOpenAiCommentModal('notes')}
-                  className="text-xs font-semibold text-[#3F2A9E] bg-[#F3F0FE] hover:bg-[#eae3fc] px-2.5 py-1 rounded-[8px] border border-[#DDD6FA] flex items-center gap-1.5 transition-colors cursor-pointer"
+                  disabled={!canMarkPrepared}
+                  onClick={() => {
+                    workpaper.status = 'prepared';
+                    setWpData({ ...wpData });
+                    setLiveAnnouncement('Paper marked as prepared.');
+                  }}
+                  className="min-h-[44px] px-6 bg-[#102654] hover:bg-[#0B1B3D] text-white text-xs font-bold rounded-[10px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-                  <span>+ AI Review Note</span>
+                  Mark as prepared
                 </button>
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#FFF1DC] text-[#9A4A00]">
-                  Open
-                </span>
               </div>
             </div>
-
-            {/* Note conversation */}
-            {reviewNotes.map((note) => (
-              <div key={note.id} className="flex flex-col gap-3">
-                <div className="p-3.5 rounded-[10px] bg-[#F8F9FA] border border-[#E3E6EB] flex flex-col gap-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-[#1B2430]">
-                      {note.author.name} ({note.author.title})
-                    </span>
-                    <span className="text-[#5B6676] font-mono-numbers text-[11px]">
-                      {note.createdAt}
-                    </span>
-                  </div>
-                  <div className="text-xs text-[#5B6676] bg-white p-1 rounded px-2 border border-[#E3E6EB]/60 inline-block w-fit font-mono-numbers">
-                    Cell: {note.cellRef}
-                  </div>
-                  <p className="text-xs text-[#1B2430] leading-relaxed">
-                    {note.content}
-                  </p>
-                </div>
-
-                {/* Replies */}
-                {note.replies.map((rep) => (
-                  <div
-                    key={rep.id}
-                    className="ml-4 p-3 rounded-[10px] bg-[#E8EEFD]/30 border border-[#1E4FD8]/20 flex flex-col gap-1.5"
-                  >
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-[#1E4FD8]">
-                        {rep.author.name} ({rep.author.title})
-                      </span>
-                      <span className="text-[#5B6676] font-mono-numbers text-[11px]">
-                        {rep.createdAt}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#1B2430] leading-relaxed">
-                      {rep.content}
-                    </p>
-                  </div>
-                ))}
-
-                {/* Reply Input Box */}
-                <div className="flex flex-col gap-2 mt-2">
-                  <textarea
-                    rows={2}
-                    value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    placeholder="Type reply or explanation to clear this note..."
-                    className="w-full p-2.5 text-xs border border-[#D5D9E0] rounded-[10px] bg-white text-[#1B2430] focus-visible:outline-2 focus-visible:outline-[#1E4FD8] focus-visible:outline-offset-2"
-                  />
-                  <div className="flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => handleClearReviewNote(note.id)}
-                      className="text-xs text-[#0B6B4D] hover:underline font-semibold cursor-pointer"
-                    >
-                      Mark as cleared
-                    </button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      icon={<Send className="w-3 h-3" />}
-                      onClick={() => handleSendReply(note.id)}
-                    >
-                      Send reply
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {renderSectionComments('notes')}
-          </div>
+          </details>
         </div>
-      </div>
 
-      {/* AI Comment Generator & Section Applicator Modal */}
-      {aiCommentModalOpen && (
-        <div className="fixed inset-0 z-50 bg-[#1B2430]/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-[14px] border border-[#E3E6EB] max-w-[620px] w-full max-h-[90vh] overflow-y-auto p-6 shadow-xl flex flex-col gap-4">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-[#E3E6EB]">
-              <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-lg bg-[#5B3FD0]/10 text-[#5B3FD0] shrink-0">
-                  <Sparkles className="w-5 h-5" />
-                </span>
-                <div>
-                  <h3 className="font-semibold text-base text-[#1B2430]">
-                    AI Audit Comment Assistant
-                  </h3>
-                  <p className="text-xs text-[#5B6676]">
-                    Generate context-aware audit commentary and apply it to any section at any time.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAiCommentModalOpen(false)}
-                className="text-[#5B6676] hover:text-[#1B2430] p-1.5 rounded-lg hover:bg-[#F4F5F7] transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+        {/* Right Column: Side Panel Tabs */}
+        {!focusMode && (
+          <div className="lg:col-span-4 blynt-card p-5 flex flex-col gap-4">
+            {/* Tabs Header */}
+            <div className="flex items-center justify-between border-b border-[#E3E7EF] pb-3 text-xs">
+              {[
+                { id: 'comments', label: 'Comments', count: comments.length },
+                { id: 'evidence', label: 'Evidence', count: attachments.length },
+                { id: 'bot', label: 'Blynt Bot' },
+                { id: 'history', label: 'History' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveSideTab(tab.id as any)}
+                  className={`pb-1 font-bold transition-colors cursor-pointer ${
+                    activeSideTab === tab.id
+                      ? 'text-[#102654] border-b-2 border-[#102654]'
+                      : 'text-[#5B6478] hover:text-[#102654]'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  {tab.count !== undefined && (
+                    <span className="ml-1 text-[10px] font-mono px-1 rounded bg-[#F4F5F7]">
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              ))}
             </div>
 
-            {/* Target Section Selection */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-[#5B6676]">
-                Target Section to Apply Comment
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                {SECTION_DEFINITIONS.map((s) => {
-                  const isSelected = selectedTargetSection === s.id;
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => handleSelectSection(s.id)}
-                      className={`px-2.5 py-2 text-xs font-medium rounded-[8px] border text-left truncate transition-colors cursor-pointer ${
-                        isSelected
-                          ? 'border-[#5B3FD0] bg-[#F3F0FE] text-[#3F2A9E] font-semibold ring-1 ring-[#5B3FD0]'
-                          : 'border-[#E3E6EB] bg-white text-[#5B6676] hover:bg-[#F8F9FA]'
+            {/* Tab 1: Comments */}
+            {activeSideTab === 'comments' && (
+              <div className="flex flex-col gap-4 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#5B6478] text-[11px] font-semibold">
+                    Pinned threads on cells &amp; rows
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowCommentComposer(true)}
+                    className="text-[#B8432F] font-bold hover:underline"
+                  >
+                    + Add comment
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  {comments.map((c, idx) => (
+                    <div
+                      key={c.id}
+                      className={`p-3 rounded-[10px] border flex flex-col gap-2 ${
+                        c.type === 'review_note'
+                          ? 'bg-[#FFF4DB]/40 border-[#6B4700]/30'
+                          : 'bg-[#F6F7FB] border-[#E3E7EF]'
                       }`}
                     >
-                      {s.title.split(' ')[0]} {s.title.split(' ')[1] || ''}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`w-4 h-4 rounded-full text-white font-mono text-[9px] font-bold flex items-center justify-center ${
+                              c.type === 'review_note' ? 'bg-[#6B4700]' : 'bg-[#FF7D6B]'
+                            }`}
+                          >
+                            {idx + 1}
+                          </span>
+                          <span className="font-bold text-[#102654]">{c.created_by_name}</span>
+                        </div>
+                        <span className="text-[10px] font-bold uppercase text-[#5B6478]">
+                          {c.type}
+                        </span>
+                      </div>
 
-            {/* Quick Preset Prompts */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-[#5B6676]">
-                Recommended Prompts for Selected Section
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {SECTION_DEFINITIONS.find((s) => s.id === selectedTargetSection)?.presetPrompts.map(
-                  (prompt, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handlePresetPrompt(prompt)}
-                      className="px-2.5 py-1 text-xs rounded-full bg-[#F4F5F7] border border-[#E3E6EB] text-[#1B2430] hover:bg-[#E8EEFD] hover:text-[#1E4FD8] hover:border-[#1E4FD8]/40 transition-colors text-left cursor-pointer"
-                    >
-                      {prompt}
-                    </button>
-                  )
-                )}
-              </div>
-            </div>
+                      <div className="text-[#102654] leading-relaxed">{c.body}</div>
 
-            {/* Custom Prompt Input */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-[#5B6676]">
-                Custom AI Instructions (Optional)
-              </label>
-              <div className="flex gap-2">
+                      <div className="text-[10px] text-[#5B6478] font-mono">
+                        Anchor: {c.anchor_summary}
+                      </div>
+
+                      {c.status === 'open' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleResolveComment(c.id)}
+                          className="self-end text-[11px] font-bold text-[#0B6B52] hover:underline"
+                        >
+                          ✓ Resolve note
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-[#0B6B52] font-semibold">
+                          ✓ Resolved
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tab 2: Evidence Preview */}
+            {activeSideTab === 'evidence' && (
+              <div className="flex flex-col gap-3 text-xs">
+                <div className="font-bold text-[#102654]">
+                  Dell_PowerEdge_Invoice_9811.pdf
+                </div>
+                <div className="border border-[#E3E7EF] rounded-[10px] p-4 bg-[#F6F7FB] flex flex-col items-center justify-center gap-2">
+                  <FileText className="w-8 h-8 text-[#1D4E89]" />
+                  <div className="text-[11px] font-semibold text-[#102654]">
+                    Page 1: Supplier Tax Invoice
+                  </div>
+                  <div className="p-2 bg-[#E6F4EF] border border-[#0B6B52]/30 rounded text-[11px] font-mono font-bold text-[#0B6B52]">
+                    EXTRACTED: £2,400.00 (Agrees to additions)
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tab 3: Blynt Bot */}
+            {activeSideTab === 'bot' && (
+              <div className="flex flex-col gap-3 text-xs text-[#102654]">
+                <div className="font-bold text-[#A23A27] flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Blynt Bot Insights</span>
+                </div>
+                <div className="p-3 bg-[#FFF1EE] border border-[#FF7D6B]/30 rounded-[10px] leading-relaxed">
+                  ✦ suggestion: All asset class movement rows reconcile. One missing proceeds voucher detected for £250.00. Recommend requesting recycling remittance advice before partner sign-off.
+                </div>
+              </div>
+            )}
+
+            {/* Tab 4: History */}
+            {activeSideTab === 'history' && (
+              <div className="flex flex-col gap-2.5 text-xs">
+                <div className="font-bold text-[#102654]">Audit log &amp; revisions</div>
+                <div className="p-2.5 bg-[#F6F7FB] border border-[#E3E7EF] rounded-[8px]">
+                  <div className="font-bold text-[#102654]">Roll forward executed</div>
+                  <div className="text-[10px] text-[#5B6478]">Anika Kapoor • 23 Oct 2026, 09:00</div>
+                </div>
+                <div className="p-2.5 bg-[#F6F7FB] border border-[#E3E7EF] rounded-[8px]">
+                  <div className="font-bold text-[#102654]">Vouched additions invoice</div>
+                  <div className="text-[10px] text-[#5B6478]">Anika Kapoor • 23 Oct 2026, 10:15</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Customise View Modal */}
+      {showCustomiseModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-[#0B1B3D]/40 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-[16px] border border-[#E3E7EF] shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95">
+            <h3 className="text-base font-bold text-[#102654] mb-1">
+              Customise view preferences
+            </h3>
+            <p className="text-xs text-[#5B6478] mb-5">
+              Saved per user and persists across sessions and devices.
+            </p>
+
+            <div className="flex flex-col gap-3 text-xs text-[#102654]">
+              <label className="flex items-center justify-between cursor-pointer">
+                <span>Show prior year column</span>
                 <input
-                  type="text"
-                  value={customCommentPrompt}
-                  onChange={(e) => setCustomCommentPrompt(e.target.value)}
-                  placeholder="e.g., Note that Barclays confirmation was verified directly..."
-                  className="flex-1 px-3.5 py-2 text-xs bg-white border border-[#D5D9E0] rounded-[10px] text-[#1B2430] placeholder:text-[#5B6676]/60 focus-visible:outline-2 focus-visible:outline-[#1E4FD8] focus-visible:outline-offset-2"
+                  type="checkbox"
+                  checked={viewPrefs.showPriorYear}
+                  onChange={(e) => setViewPrefs({ ...viewPrefs, showPriorYear: e.target.checked })}
+                  className="w-4 h-4 rounded text-[#102654] focus:ring-[#FF7D6B]"
                 />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleGenerateCustomComment}
-                  disabled={isGeneratingComment}
-                >
-                  {isGeneratingComment ? 'Generating...' : 'Generate'}
-                </Button>
+              </label>
+
+              <label className="flex items-center justify-between cursor-pointer">
+                <span>Show change % variance</span>
+                <input
+                  type="checkbox"
+                  checked={viewPrefs.showChangePercent}
+                  onChange={(e) => setViewPrefs({ ...viewPrefs, showChangePercent: e.target.checked })}
+                  className="w-4 h-4 rounded text-[#102654] focus:ring-[#FF7D6B]"
+                />
+              </label>
+
+              <label className="flex items-center justify-between cursor-pointer">
+                <span>Show source reference bar</span>
+                <input
+                  type="checkbox"
+                  checked={viewPrefs.showSource}
+                  onChange={(e) => setViewPrefs({ ...viewPrefs, showSource: e.target.checked })}
+                  className="w-4 h-4 rounded text-[#102654] focus:ring-[#FF7D6B]"
+                />
+              </label>
+
+              <div className="pt-2 border-t border-[#E3E7EF]">
+                <span className="block font-semibold mb-1">Row spacing</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {['comfortable', 'compact'].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setViewPrefs({ ...viewPrefs, rowSpacing: s as any })}
+                      className={`p-2 rounded-[8px] text-xs font-semibold capitalize border ${
+                        viewPrefs.rowSpacing === s
+                          ? 'border-[#102654] bg-[#EAF5FC] text-[#102654]'
+                          : 'border-[#D5DBE7] text-[#5B6478]'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* AI Generated Preview & Edit Box */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold uppercase tracking-wider text-[#3F2A9E] flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-                  <span>Generated Comment (Editable before applying)</span>
-                </label>
-                <span className="text-[10px] font-mono-numbers px-2 py-0.5 rounded bg-[#E2F4EC] text-[#0B6B4D] font-semibold">
-                  Confidence: 99.2%
-                </span>
-              </div>
-
-              <textarea
-                rows={3}
-                value={generatedDraftComment}
-                onChange={(e) => setGeneratedDraftComment(e.target.value)}
-                className="w-full p-3 text-xs leading-relaxed border border-[#DDD6FA] rounded-[10px] bg-[#F3F0FE]/40 text-[#1B2430] focus-visible:outline-2 focus-visible:outline-[#5B3FD0] focus-visible:outline-offset-2 font-sans"
-              />
-
-              <div className="flex items-center justify-between text-[11px] text-[#5B6676]">
-                <span>Source: Barclays_Operating_Statement_Sept2026.pdf (Prompt v2.4-comment-gen)</span>
-                <span>Auditor review mandatory under ISA 230</span>
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="pt-3 border-t border-[#E3E6EB] flex items-center justify-between sticky bottom-0 bg-white">
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => setAiCommentModalOpen(false)}
+            <div className="flex items-center justify-end gap-2.5 pt-5 border-t border-[#E3E7EF] mt-5">
+              <button
+                type="button"
+                onClick={() => setShowCustomiseModal(false)}
+                className="px-4 py-2 border border-[#D5DBE7] text-xs font-semibold text-[#5B6478] rounded-[8px]"
               >
                 Cancel
-              </Button>
-
-              <Button
-                variant="primary"
-                size="md"
-                icon={<Check className="w-4 h-4" />}
-                onClick={handleApplyComment}
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveViewPrefs}
+                className="px-5 py-2 bg-[#102654] hover:bg-[#0B1B3D] text-white text-xs font-bold rounded-[8px]"
               >
-                Apply Comment to Section
-              </Button>
+                Save as my default
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Version History Modal */}
-      {historyModalOpen && (
-        <div className="fixed inset-0 z-50 bg-[#1B2430]/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-[14px] border border-[#E3E6EB] max-w-[540px] w-full p-6 shadow-xl flex flex-col gap-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[#E3E6EB]">
-              <div className="flex items-center gap-2">
-                <History className="w-5 h-5 text-[#1E4FD8]" />
-                <h3 className="font-semibold text-base text-[#1B2430]">
-                  WP B-10 Version History & Audit Log
-                </h3>
-              </div>
-              <button
-                onClick={() => setHistoryModalOpen(false)}
-                className="text-sm font-semibold text-[#5B6676] hover:text-[#1B2430] cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-
-            <p className="text-xs text-[#5B6676]">
-              Immutable event log tracking all mathematical adjustments, AI extractions, section comments, and sign-offs.
+      {/* Change Template Modal */}
+      {showTemplateModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-[#0B1B3D]/40 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-[16px] border border-[#E3E7EF] shadow-2xl max-w-lg w-full p-6 animate-in fade-in zoom-in-95">
+            <h3 className="text-base font-bold text-[#102654] mb-1">
+              Change workpaper template
+            </h3>
+            <p className="text-xs text-[#5B6478] mb-4">
+              Switching templates migrates data_json and keeps figures, attachments, and comments.
             </p>
 
-            <div className="flex flex-col gap-2.5 max-h-[300px] overflow-y-auto pr-1">
-              {auditLog.map((log) => (
-                <div
-                  key={log.id}
-                  className="p-3 rounded-[10px] bg-[#F8F9FA] border border-[#E3E6EB] text-xs flex flex-col gap-1"
+            <div className="p-3 mb-4 bg-[#FFF4DB] border border-[#6B4700]/30 rounded-[10px] text-xs text-[#6B4700]">
+              Impact preview: 8 core fields map across. Figures and attachments will be preserved. Existing sign-offs will be marked stale.
+            </div>
+
+            <div className="flex flex-col gap-2.5 text-xs">
+              {[
+                { id: 'tpl_f10', name: 'Fixed assets: register and depreciation (Active)' },
+                { id: 'tpl_f10_simple', name: 'Fixed assets: simple (micro-entity FRS 105)' },
+              ].map((t) => (
+                <label
+                  key={t.id}
+                  className="p-3 rounded-[10px] border border-[#E3E7EF] flex items-center justify-between cursor-pointer hover:border-[#102654]"
                 >
-                  <div className="flex items-center justify-between font-mono-numbers text-[11px] text-[#5B6676]">
-                    <span>{log.timestamp}</span>
-                    <span className="font-semibold text-[#1E4FD8]">{log.action}</span>
-                  </div>
-                  <div className="font-semibold text-[#1B2430]">
-                    {log.user} ({log.role})
-                  </div>
-                  <div className="text-[#5B6676] leading-relaxed">{log.details}</div>
-                </div>
+                  <span className="font-bold text-[#102654]">{t.name}</span>
+                  <input
+                    type="radio"
+                    name="target-template"
+                    checked={selectedTargetTemplate === t.id}
+                    onChange={() => setSelectedTargetTemplate(t.id)}
+                    className="w-4 h-4 text-[#102654] focus:ring-[#FF7D6B]"
+                  />
+                </label>
               ))}
             </div>
 
-            <div className="pt-3 border-t border-[#E3E6EB] flex justify-end">
-              <Button
-                variant="outline"
-                size="md"
-                onClick={() => setHistoryModalOpen(false)}
+            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[#E3E7EF] mt-5">
+              <button
+                type="button"
+                onClick={() => setShowTemplateModal(false)}
+                className="px-4 py-2 border border-[#D5DBE7] text-xs font-semibold text-[#5B6478] rounded-[8px]"
               >
-                Close history
-              </Button>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  services.changeTemplate(
+                    'firm_blynt_uk',
+                    { id: 'usr_sam', name: 'Sam Rivera', role: 'reviewer' },
+                    wpId,
+                    selectedTargetTemplate
+                  );
+                  setShowTemplateModal(false);
+                  setWpData(services.getWorkpaper(wpId));
+                  setLiveAnnouncement('Template switched successfully.');
+                }}
+                className="px-5 py-2 bg-[#102654] hover:bg-[#0B1B3D] text-white text-xs font-bold rounded-[8px]"
+              >
+                Confirm switch
+              </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comment Anywhere Pin Composer Modal */}
+      {showCommentComposer && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-[#0B1B3D]/40 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-[16px] border border-[#E3E7EF] shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95">
+            <h3 className="text-base font-bold text-[#102654] mb-1">
+              Add pinned comment
+            </h3>
+            <p className="text-xs text-[#5B6478] mb-4">
+              Anchored to {commentAnchor?.row || 'selected element'}. Open review notes block final sign-off.
+            </p>
+
+            <form onSubmit={handleAddCommentSubmit} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="block font-semibold text-[#102654] mb-1">Type</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: 'comment', label: 'Comment' },
+                    { id: 'review_note', label: 'Review note' },
+                    { id: 'client_query', label: 'Client query' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setCommentType(t.id as any)}
+                      className={`p-2 rounded-[8px] font-bold text-center border cursor-pointer ${
+                        commentType === t.id
+                          ? 'bg-[#102654] text-white'
+                          : 'bg-[#F6F7FB] border-[#D5DBE7] text-[#5B6478]'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#102654] mb-1">Note text</label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="Enter observation, required explanation, or question..."
+                  value={commentBody}
+                  onChange={(e) => setCommentBody(e.target.value)}
+                  className="w-full p-3 bg-[#F6F7FB] border border-[#D5DBE7] rounded-[8px] text-[#102654] outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#E3E7EF]">
+                <button
+                  type="button"
+                  onClick={() => setShowCommentComposer(false)}
+                  className="px-4 py-2 border border-[#D5DBE7] text-xs font-semibold text-[#5B6478] rounded-[8px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#FF7D6B] hover:bg-[#ff9485] text-[#0B1B3D] text-xs font-bold rounded-[8px]"
+                >
+                  Pin note
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

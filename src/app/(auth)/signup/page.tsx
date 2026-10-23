@@ -15,8 +15,8 @@ import { Field, Input, Select } from '@/components/ui/Field';
 
 export default function SignupPage() {
   const router = useRouter();
-  const [fullName, setFullName] = useState('Sam Rivera');
-  const [workEmail, setWorkEmail] = useState('sam.rivera@vanguard-audit.com');
+  const [fullName, setFullName] = useState('Sam Rivera (Test)');
+  const [workEmail, setWorkEmail] = useState('sam.rivera.test@vanguard-audit.com');
   const [firmName, setFirmName] = useState('Vanguard & Partners LLP');
   const [role, setRole] = useState('manager');
   const [password, setPassword] = useState('SuperSecretAudit2026!');
@@ -67,7 +67,7 @@ export default function SignupPage() {
                   required
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="e.g. Sam Rivera"
+                  placeholder="e.g. Sam Rivera (Test)"
                 />
               </Field>
 

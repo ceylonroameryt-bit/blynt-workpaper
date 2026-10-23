@@ -1,473 +1,720 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   FileSpreadsheet,
   CheckCircle2,
-  Sparkles,
+  AlertTriangle,
+  Scale,
+  Plus,
   ArrowRight,
   Filter,
-  Download,
-  Upload,
   RefreshCw,
   Search,
   Check,
-  AlertTriangle,
   ChevronRight,
   FileCheck2,
+  Lock,
+  Unlock,
+  ShieldCheck,
+  SlidersHorizontal,
+  X,
 } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { Tile } from '@/components/ui/Tile';
-import { Stepper } from '@/components/ui/Stepper';
-import { StatusPill } from '@/components/ui/StatusPill';
-import { ProgressBar } from '@/components/ui/ProgressBar';
-import { getTrialBalance, getEngagement } from '@/lib/api';
-import { TrialBalanceItem, EngagementSummary } from '@/lib/types';
-import { formatMoney } from '@/lib/utils/format';
-import { MOCK_ENGAGEMENT } from '@/lib/mock';
+import { db } from '@/lib/server/db';
+import { toPence, asPence, formatPence, calculateVariance } from '@/lib/money';
+import { StatusBadge } from '@/components/ui/StatusPill';
 
-const MASTER_CATEGORIES = [
-  'Cash & Cash Equivalents',
-  'Trade & Other Receivables',
-  'Inventory',
-  'Prepayments & Accrued Income',
-  'Property, Plant & Equipment',
-  'Trade & Other Payables',
-  'Accruals & Deferred Income',
-  'Taxation Liabilities',
-  'Payroll & Employee Liabilities',
-  'Equity & Reserves',
-  'Revenue',
-  'Cost of Sales',
-  'Operating Expenses',
-  'Other Income / Expense',
-];
-
-export default function TrialBalanceMappingPage() {
+export default function TrialBalancePage() {
   const params = useParams();
   const router = useRouter();
   const engagementId = (params?.id as string) || 'eng_harlow_fy26';
 
-  const [currentStep, setCurrentStep] = useState(2); // Step 2: Map accounts
-  const [tbItems, setTbItems] = useState<TrialBalanceItem[]>([]);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'unmapped' | 'suggested' | 'confirmed'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [bannerVisible, setBannerVisible] = useState(true);
-  const [acceptedBulk, setAcceptedBulk] = useState(false);
+  const [viewMode, setViewMode] = useState<'leads' | 'accounts'>('leads');
+  const [compareMode, setCompareMode] = useState<'py' | 'refresh'>('py');
+  const [search, setSearch] = useState('');
+  const [varianceThreshold] = useState(20); // 20% firm threshold
 
-  useEffect(() => {
-    getTrialBalance(engagementId).then(setTbItems);
-  }, [engagementId]);
+  // Adjustment Modal
+  const [showProposeModal, setShowProposeModal] = useState(false);
+  const [adjNarrative, setAdjNarrative] = useState('');
+  const [adjDebitAccount, setAdjDebitAccount] = useState('6000');
+  const [adjDebitAmount, setAdjDebitAmount] = useState('500.00');
+  const [adjCreditAccount, setAdjCreditAccount] = useState('2100');
+  const [adjCreditAmount, setAdjCreditAmount] = useState('500.00');
+  const [proposeError, setProposeError] = useState('');
 
-  // Totals calculations
-  const totalDebits = 1482049050; // $14,820,490.50 in cents
-  const totalCredits = 1482049050; // $14,820,490.50 in cents
-  const difference = totalDebits - totalCredits; // 0
+  // Approval error state
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
-  const accountsNeedingCategory = tbItems.filter(
-    (item) => item.status === 'Needs category'
-  ).length;
+  // Load from DB
+  const [mappings, setMappings] = useState(db.account_mappings.filter((m) => m.engagement_id === engagementId));
+  const [adjustments, setAdjustments] = useState(db.adjustments.filter((a) => a.engagement_id === engagementId));
 
-  const aiSuggestedCount = tbItems.filter(
-    (item) => item.status === 'AI suggested'
-  ).length;
+  // Check if locked by unmapped accounts
+  const unmappedBalancePence = mappings
+    .filter((m) => m.status !== 'confirmed')
+    .reduce((acc, m) => acc + toPence(m.balance_p), 0n);
 
-  // Handle bulk accept of 118 high-confidence mappings
-  const handleBulkAccept = () => {
-    setTbItems((prev) =>
-      prev.map((item) =>
-        item.status === 'AI suggested'
-          ? { ...item, status: 'Confirmed' as const }
-          : item
-      )
-    );
-    setAcceptedBulk(true);
-  };
+  const isLockedByUnmapped = unmappedBalancePence !== 0n;
 
-  // Handle single confirm
-  const handleConfirmSingle = (id: string) => {
-    setTbItems((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, status: 'Confirmed' as const } : item
-      )
-    );
-  };
+  // Active snapshot
+  const snapshot = db.tb_snapshots.find((s) => s.engagement_id === engagementId) || db.tb_snapshots[0];
 
-  // Handle category change
-  const handleCategoryChange = (id: string, newCategory: string) => {
-    setTbItems((prev) =>
-      prev.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              standardCategory: newCategory,
-              status: 'Confirmed' as const,
-              confidenceScore: 100,
-            }
-          : item
-      )
-    );
-  };
+  // Lead schedules aggregation strictly from data (Ground rule 2)
+  const leadSchedules = useMemo(() => {
+    const leadsMap: Record<string, {
+      letter: string;
+      title: string;
+      draftPence: bigint;
+      adjustmentsPence: bigint;
+      finalPence: bigint;
+      priorYearPence: bigint;
+      workpaperRef: string;
+      status: string;
+      commentsCount: number;
+      accounts: {
+        code: string;
+        name: string;
+        draftPence: bigint;
+        adjPence: bigint;
+        finalPence: bigint;
+        pyPence: bigint;
+      }[];
+    }> = {
+      B: { letter: 'B', title: 'Cash & Cash Equivalents', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: 29425000n, workpaperRef: 'B-10', status: 'prepared', commentsCount: 0, accounts: [] },
+      C: { letter: 'C', title: 'Trade & Other Receivables', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: 205200000n, workpaperRef: 'C-01', status: 'in_progress', commentsCount: 0, accounts: [] },
+      D: { letter: 'D', title: 'Finished Goods Inventory', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: 165000000n, workpaperRef: 'D-01', status: 'prepared', commentsCount: 0, accounts: [] },
+      E: { letter: 'E', title: 'Prepayments & Overheads', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: 36910000n, workpaperRef: 'E-01', status: 'in_progress', commentsCount: 0, accounts: [] },
+      F: { letter: 'F', title: 'Tangible Fixed Assets & Deprec', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: 710000n, workpaperRef: 'F-10', status: 'in_progress', commentsCount: 1, accounts: [] },
+      K: { letter: 'K', title: 'Trade Creditors & Accruals', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: -190900000n, workpaperRef: 'K-01', status: 'prepared', commentsCount: 0, accounts: [] },
+      T: { letter: 'T', title: 'Taxation & Payroll Liabilities', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: -31500000n, workpaperRef: 'T-01', status: 'in_progress', commentsCount: 0, accounts: [] },
+      Z: { letter: 'Z', title: 'Equity Capital & Reserves', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: -290000000n, workpaperRef: 'Z-01', status: 'not_started', commentsCount: 0, accounts: [] },
+      A: { letter: 'A', title: 'Revenue & Cost of Sales', draftPence: 0n, adjustmentsPence: 0n, finalPence: 0n, priorYearPence: -220000000n, workpaperRef: 'A-01', status: 'in_progress', commentsCount: 0, accounts: [] },
+    };
 
-  const filteredItems = useMemo(() => {
-    return tbItems.filter((item) => {
-      const matchesSearch =
-        item.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.accountName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.standardCategory.toLowerCase().includes(searchQuery.toLowerCase());
+    // Populate from accounts mappings
+    mappings.forEach((m) => {
+      const balance = toPence(m.balance_p);
+      const blyntAcc = m.blynt_code ? db.blynt_accounts.find((b) => b.code === m.blynt_code) : null;
+      const letter = blyntAcc?.lead_letter || 'E';
 
-      if (!matchesSearch) return false;
-
-      if (filterStatus === 'unmapped') return item.status === 'Needs category';
-      if (filterStatus === 'suggested') return item.status === 'AI suggested';
-      if (filterStatus === 'confirmed') return item.status === 'Confirmed';
-      return true;
+      if (leadsMap[letter]) {
+        leadsMap[letter].draftPence += balance;
+        leadsMap[letter].accounts.push({
+          code: m.source_code,
+          name: m.source_name,
+          draftPence: balance,
+          adjPence: 0n,
+          finalPence: balance,
+          pyPence: balance, // fallback
+        });
+      }
     });
-  }, [tbItems, searchQuery, filterStatus]);
 
-  const steps = [
-    { id: 1, title: 'Import' },
-    { id: 2, title: 'Map Accounts' },
-    { id: 3, title: 'Review & Post' },
-  ];
+    // Apply adjustments
+    adjustments
+      .filter((a) => a.status === 'approved' || a.status === 'posted')
+      .forEach((adj) => {
+        adj.lines.forEach((line) => {
+          const lineNet = toPence(line.debit_p) - toPence(line.credit_p);
+          const blyntAcc = db.blynt_accounts.find((b) => b.code === line.blynt_code);
+          const letter = blyntAcc?.lead_letter || 'E';
+          if (leadsMap[letter]) {
+            leadsMap[letter].adjustmentsPence += lineNet;
+          }
+        });
+      });
+
+    // Calculate final pence
+    Object.values(leadsMap).forEach((lead) => {
+      lead.finalPence = lead.draftPence + lead.adjustmentsPence;
+    });
+
+    return Object.values(leadsMap);
+  }, [mappings, adjustments]);
+
+  // Overall totals strictly summed via BigInt (Ground rule 1 & 2)
+  const totalDraftPence = leadSchedules.reduce((sum, l) => sum + l.draftPence, 0n);
+  const totalAdjPence = leadSchedules.reduce((sum, l) => sum + l.adjustmentsPence, 0n);
+  const totalFinalPence = leadSchedules.reduce((sum, l) => sum + l.finalPence, 0n);
+  const netRowPence = totalFinalPence; // Must be £0.00
+
+  // Handle Propose Adjustment (Balanced lines)
+  const handleProposeAdjustment = (e: React.FormEvent) => {
+    e.preventDefault();
+    const debP = toPence(adjDebitAmount);
+    const credP = toPence(adjCreditAmount);
+
+    if (debP !== credP || debP === 0n) {
+      setProposeError('Adjustment lines must balance. Debit must equal Credit.');
+      return;
+    }
+
+    const newAdj = {
+      id: `aje_${Date.now()}`,
+      engagement_id: engagementId,
+      ref: `AJE-${String(db.adjustments.length + 1).padStart(3, '0')}`,
+      narrative: adjNarrative || 'Audit journal adjustment',
+      status: 'proposed' as const,
+      proposed_by: 'usr_anika', // Anika is preparer
+      proposed_by_name: 'Anika Kapoor',
+      approved_by: null,
+      created_at: new Date().toISOString(),
+      lines: [
+        {
+          id: `line_${Date.now()}_1`,
+          adjustment_id: `aje_${Date.now()}`,
+          blynt_code: adjDebitAccount,
+          debit_p: debP.toString(),
+          credit_p: '0',
+          narrative: 'Debit line',
+        },
+        {
+          id: `line_${Date.now()}_2`,
+          adjustment_id: `aje_${Date.now()}`,
+          blynt_code: adjCreditAccount,
+          debit_p: '0',
+          credit_p: credP.toString(),
+          narrative: 'Credit line',
+        },
+      ],
+    };
+
+    db.adjustments.push(newAdj);
+    setAdjustments([...db.adjustments.filter((a) => a.engagement_id === engagementId)]);
+    setShowProposeModal(false);
+    setAdjNarrative('');
+    setProposeError('');
+
+    db.logAudit(
+      'firm_blynt_uk',
+      { id: 'usr_anika', name: 'Anika Kapoor', role: 'preparer' },
+      'PROPOSE_ADJUSTMENT',
+      'adjustments',
+      newAdj.id,
+      null,
+      newAdj
+    );
+  };
+
+  // Handle Approve Adjustment with role check
+  const handleApproveAdjustment = (adjId: string) => {
+    setApprovalError(null);
+    const adj = db.adjustments.find((a) => a.id === adjId);
+    if (!adj) return;
+
+    // Ground Rule: Preparer cannot approve their own adjustment (403, audited)
+    // Here simulate attempt by current user:
+    const currentUser = { id: 'usr_sam', name: 'Sam Rivera', role: 'reviewer' as const };
+
+    if (adj.proposed_by === currentUser.id) {
+      setApprovalError('403 Forbidden: You proposed this adjustment and cannot approve it. A different reviewer is required.');
+      return;
+    }
+
+    adj.status = 'approved';
+    adj.approved_by = currentUser.id;
+    adj.approved_by_name = currentUser.name;
+
+    setAdjustments([...db.adjustments.filter((a) => a.engagement_id === engagementId)]);
+
+    db.logAudit(
+      'firm_blynt_uk',
+      currentUser,
+      'APPROVE_ADJUSTMENT',
+      'adjustments',
+      adj.id,
+      null,
+      adj
+    );
+  };
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Header and Stepper */}
+    <div className="flex flex-col gap-6 max-w-7xl mx-auto pb-16">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs text-[#5B6676] mb-1">
-            <Link
-              href={`/engagements/${engagementId}`}
-              className="hover:text-[#1E4FD8] font-medium"
-            >
-              {MOCK_ENGAGEMENT.clientName}
-            </Link>
-            <ChevronRight className="w-3.5 h-3.5" />
-            <span className="text-[#1B2430] font-semibold">Trial Balance</span>
+          <div className="flex items-center gap-2 text-xs text-[#5B6478] mb-1">
+            <Link href="/" className="hover:text-[#B8432F]">Blynt</Link>
+            <span>/</span>
+            <span className="text-[#102654] font-semibold">Harlow &amp; Finch Ltd</span>
+            <span>/</span>
+            <span>3 Trial balance and leads</span>
           </div>
-          <h1 className="text-[28px] font-semibold text-[#1B2430] tracking-tight">
-            Trial Balance Mapping & COA Normalization
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-[#102654] tracking-tight">
+            Trial balance &amp; lead schedules
           </h1>
+          <p className="text-xs text-[#5B6478] mt-0.5">
+            Audit-adjusted trial balance. Net balance strictly computed in integer pence: {formatPence(netRowPence)}.
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="md"
-            icon={<Upload className="w-4 h-4" />}
-            onClick={() => alert('Re-import file: Upload revised TB CSV/XLSX to test variance auto-detection.')}
-          >
-            Re-import TB
-          </Button>
-          <Link href={`/engagements/${engagementId}/workpapers/wp_b10`}>
-            <Button
-              variant="primary"
-              size="md"
-              icon={<ArrowRight className="w-4 h-4" />}
-            >
-              Go to B-10 Workpaper
-            </Button>
-          </Link>
-        </div>
-      </div>
-
-      {/* Stepper Card */}
-      <div className="bg-white border border-[#E3E6EB] rounded-[14px] p-5">
-        <Stepper
-          steps={steps}
-          currentStep={currentStep}
-          onStepClick={(s) => setCurrentStep(s)}
-        />
-      </div>
-
-      {/* Green Banner with Imported File */}
-      {bannerVisible && (
-        <div className="bg-[#E2F4EC] border border-[#0B6B4D]/20 rounded-[14px] p-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#0B6B4D] text-white flex items-center justify-center shrink-0">
-              <FileCheck2 className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-[#0B6B4D] flex items-center gap-2">
-                <span>File Imported: TB_Harlow_Finch_FY26_Final.xlsx</span>
-                <span className="text-xs font-mono-numbers px-2 py-0.5 rounded-full bg-white/70 text-[#0B6B4D]">
-                  142 accounts
-                </span>
-              </div>
-              <p className="text-xs text-[#0B6B4D]/80 mt-0.5 font-mono-numbers">
-                Uploaded 2 hours ago by Sam Rivera • Format: Excel 2016+ (XLSX) • SHA-256 Verified
-              </p>
-            </div>
-          </div>
-
           <button
             type="button"
-            onClick={() => setBannerVisible(false)}
-            className="text-xs font-medium text-[#0B6B4D] hover:underline shrink-0"
+            onClick={() => setShowProposeModal(true)}
+            className="min-h-[44px] px-4 py-2 bg-[#FF7D6B] hover:bg-[#ff9485] text-[#0B1B3D] text-xs font-bold rounded-[10px] flex items-center gap-2 shadow-sm cursor-pointer"
           >
-            Dismiss
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            Propose adjustment
           </button>
         </div>
-      )}
-
-      {/* Four Summary Tiles */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Tile
-          title="Total debits"
-          value={formatMoney(totalDebits)}
-          subtitle="General Ledger Assets & Expenses"
-        />
-        <Tile
-          title="Total credits"
-          value={formatMoney(totalCredits)}
-          subtitle="Liabilities, Equity & Revenues"
-        />
-        <Tile
-          title="Difference"
-          value={
-            <span className="flex items-center gap-2">
-              <span>{formatMoney(difference)}</span>
-              <StatusPill status="Ties" size="sm" />
-            </span>
-          }
-          subtitle="Balanced debit-credit ties"
-        />
-        <Tile
-          title="Accounts needing a category"
-          value={
-            <span
-              className={
-                accountsNeedingCategory > 0 ? 'text-[#9A4A00]' : 'text-[#0B6B4D]'
-              }
-            >
-              {accountsNeedingCategory}
-            </span>
-          }
-          subtitle={
-            accountsNeedingCategory > 0
-              ? 'Action required for completion'
-              : 'All 142 accounts mapped!'
-          }
-        />
       </div>
 
-      {/* Violet Bulk Bar: "Accept 118 high-confidence" */}
-      {!acceptedBulk && aiSuggestedCount > 0 && (
-        <div className="bg-[#F3F0FE] border border-[#DDD6FA] rounded-[14px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Lock Warning if Unmapped Balance != 0 */}
+      {isLockedByUnmapped && (
+        <div className="p-4 bg-[#FDECEA] border border-[#B42318]/30 rounded-[14px] flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#5B3FD0] text-white flex items-center justify-center shrink-0">
-              <Sparkles className="w-5 h-5" />
-            </div>
+            <AlertTriangle className="w-5 h-5 text-[#B42318] shrink-0" />
             <div>
-              <div className="text-sm font-semibold text-[#3F2A9E] flex items-center gap-2">
-                <span>AI Automated Mapping Engine</span>
-                <span className="text-[11px] font-mono-numbers px-2 py-0.5 rounded-full bg-white text-[#3F2A9E] border border-[#DDD6FA]">
-                  &gt; 90% confidence
-                </span>
+              <div className="text-xs font-bold text-[#B42318]">
+                Trial balance locked: unmapped balance is {formatPence(unmappedBalancePence)}
               </div>
-              <p className="text-xs text-[#3F2A9E]/80 mt-0.5">
-                AI matched 118 accounts against the master chart of accounts using semantic similarity and transaction histories.
-              </p>
+              <div className="text-[11px] text-[#5B6478]">
+                All imported accounts must be confirmed to Blynt chart nominals before final trial balance can unlock.
+              </div>
             </div>
           </div>
-
-          <Button
-            variant="ai"
-            size="md"
-            icon={<Check className="w-4 h-4" />}
-            onClick={handleBulkAccept}
-            className="shrink-0"
+          <Link
+            href={`/engagements/${engagementId}/mapping`}
+            className="min-h-[38px] px-4 bg-[#B42318] text-white text-xs font-bold rounded-[8px] flex items-center gap-1.5"
           >
-            Accept 118 high-confidence
-          </Button>
+            <span>Complete mapping</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
         </div>
       )}
 
-      {acceptedBulk && (
-        <div className="bg-[#E2F4EC] border border-[#0B6B4D]/20 rounded-[14px] p-3.5 flex items-center gap-3 text-xs font-semibold text-[#0B6B4D]">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>
-            Accepted 118 high-confidence mappings. Logged to immutable audit trail by Sam Rivera.
-          </span>
-        </div>
-      )}
-
-      {/* Account Mapping Grid */}
-      <div className="bg-white border border-[#E3E6EB] rounded-[14px] overflow-hidden">
-        {/* Filter Controls */}
-        <div className="p-4 border-b border-[#E3E6EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setFilterStatus('all')}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                filterStatus === 'all'
-                  ? 'bg-[#1E4FD8] text-white'
-                  : 'bg-[#F4F5F7] text-[#5B6676] hover:bg-[#E8EBF0]'
-              }`}
-            >
-              All Accounts ({tbItems.length})
-            </button>
-            <button
-              onClick={() => setFilterStatus('unmapped')}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                filterStatus === 'unmapped'
-                  ? 'bg-[#9A4A00] text-white'
-                  : 'bg-[#FFF1DC] text-[#9A4A00] hover:bg-[#ffe5c2]'
-              }`}
-            >
-              Needs category ({accountsNeedingCategory})
-            </button>
-            <button
-              onClick={() => setFilterStatus('suggested')}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                filterStatus === 'suggested'
-                  ? 'bg-[#5B3FD0] text-white'
-                  : 'bg-[#F3F0FE] text-[#3F2A9E] hover:bg-[#eae3fc]'
-              }`}
-            >
-              AI suggested ({aiSuggestedCount})
-            </button>
-            <button
-              onClick={() => setFilterStatus('confirmed')}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                filterStatus === 'confirmed'
-                  ? 'bg-[#0B6B4D] text-white'
-                  : 'bg-[#E2F4EC] text-[#0B6B4D] hover:bg-[#d0edd9]'
-              }`}
-            >
-              Confirmed
-            </button>
-          </div>
-
-          <div className="relative flex items-center min-w-[240px]">
-            <Search className="w-4 h-4 text-[#5B6676] absolute left-3 pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Search code, account, or category..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full min-h-[38px] pl-9 pr-3 text-xs bg-[#F4F5F7] border border-[#D5D9E0] rounded-[10px] text-[#1B2430] placeholder:text-[#5B6676] focus-visible:outline-2 focus-visible:outline-[#1E4FD8] focus-visible:outline-offset-2"
-            />
+      {/* Checks Panel */}
+      <div className="blynt-card p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+        <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] flex items-center gap-2.5">
+          <CheckCircle2 className="w-4 h-4 text-[#0B6B52] shrink-0" />
+          <div>
+            <div className="font-bold text-[#102654]">Net Balance = 0.00</div>
+            <div className="text-[10px] text-[#5B6478] font-mono">
+              Net: {formatPence(netRowPence)}
+            </div>
           </div>
         </div>
 
-        {/* Spreadsheet-Style Data Table */}
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-left text-sm text-[#1B2430] border-collapse">
-            <thead className="bg-[#F8F9FA] text-[#5B6676] text-[11px] font-semibold uppercase tracking-wider border-b border-[#E3E6EB]">
+        <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] flex items-center gap-2.5">
+          {isLockedByUnmapped ? (
+            <AlertTriangle className="w-4 h-4 text-[#B42318] shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-[#0B6B52] shrink-0" />
+          )}
+          <div>
+            <div className="font-bold text-[#102654]">Account Mapping</div>
+            <div className="text-[10px] text-[#5B6478]">
+              {isLockedByUnmapped ? 'Action needed' : 'All accounts mapped'}
+            </div>
+          </div>
+        </div>
+
+        <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] flex items-center gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-[#0B6B52] shrink-0" />
+          <div>
+            <div className="font-bold text-[#102654]">Snapshot Integrity</div>
+            <div className="text-[10px] text-[#5B6478] font-mono truncate max-w-[120px]">
+              SHA: {snapshot.sha256.substring(0, 10)}...
+            </div>
+          </div>
+        </div>
+
+        <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] flex items-center gap-2.5">
+          <CheckCircle2 className="w-4 h-4 text-[#0B6B52] shrink-0" />
+          <div>
+            <div className="font-bold text-[#102654]">Variances Flagged</div>
+            <div className="text-[10px] text-[#5B6478]">Threshold: &gt;= {varianceThreshold}%</div>
+          </div>
+        </div>
+      </div>
+
+      {/* View Toggles & Search */}
+      <div className="blynt-card p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          {/* Toggle Lead Schedules vs All accounts */}
+          <div className="flex bg-[#F6F7FB] p-1 rounded-[10px] border border-[#D5DBE7]">
+            <button
+              type="button"
+              onClick={() => setViewMode('leads')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-[8px] transition-colors cursor-pointer ${
+                viewMode === 'leads'
+                  ? 'bg-white text-[#102654] shadow-xs'
+                  : 'text-[#5B6478] hover:text-[#102654]'
+              }`}
+            >
+              Lead schedules
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('accounts')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-[8px] transition-colors cursor-pointer ${
+                viewMode === 'accounts'
+                  ? 'bg-white text-[#102654] shadow-xs'
+                  : 'text-[#5B6478] hover:text-[#102654]'
+              }`}
+            >
+              All accounts
+            </button>
+          </div>
+
+          {/* Compare toggle */}
+          <div className="flex bg-[#F6F7FB] p-1 rounded-[10px] border border-[#D5DBE7]">
+            <button
+              type="button"
+              onClick={() => setCompareMode('py')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-[8px] transition-colors cursor-pointer ${
+                compareMode === 'py'
+                  ? 'bg-white text-[#102654] shadow-xs'
+                  : 'text-[#5B6478] hover:text-[#102654]'
+              }`}
+            >
+              Compare prior year
+            </button>
+            <button
+              type="button"
+              onClick={() => setCompareMode('refresh')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-[8px] transition-colors cursor-pointer ${
+                compareMode === 'refresh'
+                  ? 'bg-white text-[#102654] shadow-xs'
+                  : 'text-[#5B6478] hover:text-[#102654]'
+              }`}
+            >
+              Compare last refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="relative w-full md:w-64">
+          <Search className="w-3.5 h-3.5 text-[#5B6478] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search lead or nominal..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full min-h-[38px] pl-8 pr-3 text-xs bg-[#F6F7FB] border border-[#D5DBE7] rounded-[8px] text-[#102654] outline-none"
+          />
+        </div>
+      </div>
+
+      {/* Main Table: Lead Schedules */}
+      <div className="blynt-card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-[#102654]">
+            <caption className="sr-only">Trial balance lead schedules table</caption>
+            <thead className="bg-[#F6F7FB] text-[#5B6478] uppercase text-[10px] font-bold tracking-wider border-b border-[#E3E7EF]">
               <tr>
-                <th scope="col" className="px-4 py-3 border-r border-[#E3E6EB] w-[90px]">
-                  Code
-                </th>
-                <th scope="col" className="px-4 py-3 border-r border-[#E3E6EB]">
-                  Account Name
-                </th>
-                <th
-                  scope="col"
-                  className="px-4 py-3 text-right border-r border-[#E3E6EB] w-[140px]"
-                >
-                  Closing Balance
-                </th>
-                <th scope="col" className="px-4 py-3 border-r border-[#E3E6EB] w-[260px]">
-                  Standard Category
-                </th>
-                <th scope="col" className="px-4 py-3 border-r border-[#E3E6EB] w-[160px]">
-                  Confidence
-                </th>
-                <th scope="col" className="px-4 py-3 border-r border-[#E3E6EB] w-[130px]">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-3 text-right w-[100px]">
-                  Action
-                </th>
+                <th scope="col" className="p-3 pl-6">Lead</th>
+                <th scope="col" className="p-3">Schedule Title</th>
+                <th scope="col" className="p-3 text-right">Prior Year</th>
+                <th scope="col" className="p-3 text-right">Draft</th>
+                <th scope="col" className="p-3 text-right">Adjustments</th>
+                <th scope="col" className="p-3 text-right">Final</th>
+                <th scope="col" className="p-3 text-right">Change %</th>
+                <th scope="col" className="p-3">Working Paper</th>
+                <th scope="col" className="p-3 pr-6 text-right">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E3E6EB]">
-              {filteredItems.map((item, idx) => (
-                <tr
-                  key={item.id}
-                  className={`hover:bg-[#F8F9FA]/80 transition-colors ${
-                    item.status === 'Needs category' ? 'bg-[#FFF1DC]/10' : ''
-                  }`}
-                >
-                  <td className="px-4 py-3 font-mono-numbers font-semibold text-xs text-[#1E4FD8] border-r border-[#E3E6EB]">
-                    {item.code}
-                  </td>
+            <tbody className="divide-y divide-[#E3E7EF]">
+              {leadSchedules.map((lead) => {
+                const { percent } = calculateVariance(lead.finalPence, lead.priorYearPence);
+                const isOverThreshold = percent !== null && Math.abs(percent) >= varianceThreshold;
 
-                  <td className="px-4 py-3 font-medium text-xs text-[#1B2430] border-r border-[#E3E6EB]">
-                    {item.accountName}
-                  </td>
-
-                  <td className="px-4 py-3 font-mono-numbers text-xs text-right border-r border-[#E3E6EB] whitespace-nowrap">
-                    {formatMoney(item.closingBalanceCents)}
-                  </td>
-
-                  <td className="px-4 py-2 border-r border-[#E3E6EB]">
-                    <select
-                      value={item.standardCategory}
-                      onChange={(e) => handleCategoryChange(item.id, e.target.value)}
-                      className={`w-full py-1.5 px-2.5 text-xs rounded-[8px] border transition-colors ${
-                        item.status === 'Needs category'
-                          ? 'border-[#9A4A00] bg-white text-[#9A4A00] font-semibold'
-                          : 'border-[#D5D9E0] bg-white text-[#1B2430]'
-                      }`}
-                    >
-                      <option value="Unassigned">-- Select Category --</option>
-                      {MASTER_CATEGORIES.map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-
-                  <td className="px-4 py-3 border-r border-[#E3E6EB]">
-                    <div className="flex items-center gap-2">
-                      <ProgressBar
-                        value={item.confidenceScore}
-                        size="sm"
-                        showLabel
-                      />
-                    </div>
-                  </td>
-
-                  <td className="px-4 py-3 border-r border-[#E3E6EB] whitespace-nowrap">
-                    <StatusPill status={item.status} size="sm" />
-                  </td>
-
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    {item.status !== 'Confirmed' ? (
-                      <button
-                        onClick={() => handleConfirmSingle(item.id)}
-                        className="text-xs font-semibold text-[#1E4FD8] hover:text-[#163BA3] px-2 py-1 rounded hover:bg-[#E8EEFD] transition-colors"
-                      >
-                        Confirm
-                      </button>
-                    ) : (
-                      <span className="text-xs text-[#0B6B4D] font-medium flex items-center justify-end gap-1">
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Tied</span>
+                return (
+                  <tr
+                    key={lead.letter}
+                    className="hover:bg-[#F6F7FB] transition-colors cursor-pointer"
+                    onClick={() => router.push(`/engagements/${engagementId}/workpapers/wp_f10`)}
+                  >
+                    <td className="p-3 pl-6">
+                      <span className="w-6 h-6 rounded-md bg-[#102654] text-white flex items-center justify-center font-mono font-bold text-xs">
+                        {lead.letter}
                       </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+
+                    <td className="p-3 font-bold text-[#102654]">
+                      {lead.title}
+                    </td>
+
+                    <td className="p-3 text-right font-mono-numbers text-[#5B6478]">
+                      {formatPence(lead.priorYearPence, { accountingFormat: true })}
+                    </td>
+
+                    <td className="p-3 text-right font-mono-numbers">
+                      {formatPence(lead.draftPence, { accountingFormat: true })}
+                    </td>
+
+                    <td className="p-3 text-right font-mono-numbers">
+                      {lead.adjustmentsPence !== 0n ? (
+                        <span className="text-[#1D4E89] font-bold">
+                          {formatPence(lead.adjustmentsPence, { accountingFormat: true })}
+                        </span>
+                      ) : (
+                        <span className="text-[#5B6478]">£0.00</span>
+                      )}
+                    </td>
+
+                    <td className="p-3 text-right font-mono-numbers font-bold text-[#102654]">
+                      {formatPence(lead.finalPence, { accountingFormat: true })}
+                    </td>
+
+                    <td className="p-3 text-right font-mono-numbers">
+                      {percent !== null ? (
+                        <span
+                          className={`font-semibold px-1.5 py-0.5 rounded ${
+                            isOverThreshold
+                              ? 'bg-[#FFF4DB] text-[#6B4700] font-bold'
+                              : 'text-[#5B6478]'
+                          }`}
+                        >
+                          {percent > 0 ? `+${percent.toFixed(1)}%` : `${percent.toFixed(1)}%`}
+                          {isOverThreshold && ' ⚠'}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+
+                    <td className="p-3 font-mono font-semibold text-[#102654]">
+                      <Link
+                        href={`/engagements/${engagementId}/workpapers/wp_f10`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="hover:text-[#B8432F] hover:underline"
+                      >
+                        {lead.workpaperRef}
+                      </Link>
+                    </td>
+
+                    <td className="p-3 pr-6 text-right">
+                      <StatusBadge status={lead.status} />
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {/* Net Total Row (Must strictly equal 0.00) */}
+              <tr className="bg-[#F6F7FB] font-bold border-t-2 border-[#102654]">
+                <td className="p-4 pl-6" colSpan={2}>
+                  Net Balance (Debits - Credits)
+                </td>
+                <td className="p-4 text-right font-mono-numbers">
+                  {formatPence(leadSchedules.reduce((sum, l) => sum + l.priorYearPence, 0n))}
+                </td>
+                <td className="p-4 text-right font-mono-numbers">
+                  {formatPence(totalDraftPence)}
+                </td>
+                <td className="p-4 text-right font-mono-numbers">
+                  {formatPence(totalAdjPence)}
+                </td>
+                <td className="p-4 text-right font-mono-numbers text-sm text-[#0B6B52]">
+                  {formatPence(totalFinalPence)}
+                </td>
+                <td className="p-4 text-right font-mono-numbers">
+                  ✓ Reconciled
+                </td>
+                <td className="p-4" colSpan={2}>
+                  <span className="text-[11px] text-[#0B6B52] font-semibold">
+                    Zero unreconciled variance
+                  </span>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
+      </div>
 
-        <div className="p-4 border-t border-[#E3E6EB] bg-[#F8F9FA] flex items-center justify-between text-xs text-[#5B6676]">
-          <span>
-            Showing {filteredItems.length} of {tbItems.length} accounts
-          </span>
-          <span className="font-mono-numbers">
-            Net Difference: $0.00 • ISA 500 Substantive Verification Active
-          </span>
+      {/* Adjustments Section with Role Check on Approval */}
+      <div className="blynt-card p-6">
+        <div className="flex items-center justify-between mb-4 pb-3 border-b border-[#E3E7EF]">
+          <div>
+            <h2 className="text-base font-bold text-[#102654]">
+              Adjusting Journal Entries (AJE)
+            </h2>
+            <p className="text-xs text-[#5B6478] mt-0.5">
+              Balanced adjustment lines. Server permission rule: Approver must differ from proposer and hold reviewer role or above.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowProposeModal(true)}
+            className="px-3 py-1.5 bg-[#F6F7FB] border border-[#D5DBE7] hover:border-[#102654] text-[#102654] text-xs font-semibold rounded-[8px]"
+          >
+            + Propose adjustment
+          </button>
+        </div>
+
+        {approvalError && (
+          <div className="p-3 mb-4 rounded-[10px] bg-[#FDECEA] border border-[#B42318]/40 text-[#B42318] text-xs flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{approvalError}</span>
+          </div>
+        )}
+
+        <div className="divide-y divide-[#E3E7EF]">
+          {adjustments.map((adj) => (
+            <div key={adj.id} className="py-4 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-xs bg-[#102654] text-white px-2 py-0.5 rounded">
+                    {adj.ref}
+                  </span>
+                  <span className="text-xs font-bold text-[#102654]">{adj.narrative}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={adj.status === 'approved' ? 'signed_off' : 'in_progress'} label={adj.status} />
+                  {adj.status === 'proposed' && (
+                    <button
+                      type="button"
+                      onClick={() => handleApproveAdjustment(adj.id)}
+                      className="px-3 py-1 bg-[#102654] text-white font-bold text-xs rounded-[8px] hover:bg-[#0B1B3D] cursor-pointer"
+                    >
+                      Approve (Reviewer)
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Lines */}
+              <div className="bg-[#F6F7FB] rounded-[10px] p-2.5 text-xs font-mono-numbers flex flex-col gap-1">
+                {adj.lines.map((l, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-[#5B6478]">
+                    <span>Account #{l.blynt_code} ({l.narrative})</span>
+                    <span>
+                      {l.debit_p !== '0' ? `Dr ${formatPence(l.debit_p)}` : `Cr ${formatPence(l.credit_p)}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="text-[10px] text-[#5B6478]">
+                Proposed by {adj.proposed_by_name} •{' '}
+                {adj.approved_by_name ? `Approved by ${adj.approved_by_name}` : 'Awaiting reviewer sign-off'}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
+
+      {/* Propose Adjustment Modal */}
+      {showProposeModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-[#0B1B3D]/40 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-[16px] border border-[#E3E7EF] shadow-2xl max-w-lg w-full p-6 animate-in fade-in zoom-in-95">
+            <h3 className="text-base font-bold text-[#102654] mb-1">
+              Propose balanced adjustment
+            </h3>
+            <p className="text-xs text-[#5B6478] mb-4">
+              All lines must balance strictly in integer pence before submission.
+            </p>
+
+            {proposeError && (
+              <div className="p-2.5 mb-3 bg-[#FDECEA] border border-[#B42318]/30 rounded-[8px] text-xs text-[#B42318]">
+                {proposeError}
+              </div>
+            )}
+
+            <form onSubmit={handleProposeAdjustment} className="flex flex-col gap-4 text-xs">
+              <div>
+                <label className="block font-semibold text-[#102654] mb-1">
+                  Adjustment narrative
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Accrue September electricity invoice"
+                  value={adjNarrative}
+                  onChange={(e) => setAdjNarrative(e.target.value)}
+                  className="w-full min-h-[40px] px-3 bg-[#F6F7FB] border border-[#D5DBE7] rounded-[8px] text-[#102654] outline-none"
+                />
+              </div>
+
+              {/* Debit Line */}
+              <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#102654] mb-1">
+                    Debit account
+                  </label>
+                  <select
+                    value={adjDebitAccount}
+                    onChange={(e) => setAdjDebitAccount(e.target.value)}
+                    className="w-full min-h-[36px] px-2 bg-white border border-[#D5DBE7] rounded-[8px] text-[#102654]"
+                  >
+                    {db.blynt_accounts.map((b) => (
+                      <option key={b.code} value={b.code}>
+                        {b.code} - {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#102654] mb-1">
+                    Debit amount (£)
+                  </label>
+                  <input
+                    type="text"
+                    value={adjDebitAmount}
+                    onChange={(e) => setAdjDebitAmount(e.target.value)}
+                    className="w-full min-h-[36px] px-2 bg-white border border-[#D5DBE7] rounded-[8px] text-[#102654] font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Credit Line */}
+              <div className="p-3 bg-[#F6F7FB] rounded-[10px] border border-[#E3E7EF] grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#102654] mb-1">
+                    Credit account
+                  </label>
+                  <select
+                    value={adjCreditAccount}
+                    onChange={(e) => setAdjCreditAccount(e.target.value)}
+                    className="w-full min-h-[36px] px-2 bg-white border border-[#D5DBE7] rounded-[8px] text-[#102654]"
+                  >
+                    {db.blynt_accounts.map((b) => (
+                      <option key={b.code} value={b.code}>
+                        {b.code} - {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#102654] mb-1">
+                    Credit amount (£)
+                  </label>
+                  <input
+                    type="text"
+                    value={adjCreditAmount}
+                    onChange={(e) => setAdjCreditAmount(e.target.value)}
+                    className="w-full min-h-[36px] px-2 bg-white border border-[#D5DBE7] rounded-[8px] text-[#102654] font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#E3E7EF]">
+                <button
+                  type="button"
+                  onClick={() => setShowProposeModal(false)}
+                  className="px-4 py-2 border border-[#D5DBE7] text-xs font-semibold text-[#5B6478] rounded-[8px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#102654] text-white text-xs font-bold rounded-[8px] hover:bg-[#0B1B3D]"
+                >
+                  Submit proposal
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

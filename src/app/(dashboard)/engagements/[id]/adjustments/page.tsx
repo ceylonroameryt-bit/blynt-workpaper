@@ -56,10 +56,10 @@ export default function AdjustmentsPage() {
 
   // Totals for selected entry
   const totalDebitsCents = selectedEntry
-    ? selectedEntry.lines.reduce((sum, line) => sum + line.debitCents, 0)
+    ? selectedEntry.lines.reduce((sum: number, line: any) => sum + (line.debitCents || 0), 0)
     : 0;
   const totalCreditsCents = selectedEntry
-    ? selectedEntry.lines.reduce((sum, line) => sum + line.creditCents, 0)
+    ? selectedEntry.lines.reduce((sum: number, line: any) => sum + (line.creditCents || 0), 0)
     : 0;
   const isBalanced = totalDebitsCents === totalCreditsCents && totalDebitsCents > 0;
 
@@ -73,7 +73,7 @@ export default function AdjustmentsPage() {
             stage: 'Approved' as const,
             approvedBy: `${CURRENT_USER.name} (${CURRENT_USER.title})`,
             auditHistory: [
-              ...e.auditHistory,
+              ...(e.auditHistory || []),
               {
                 action: 'Approved',
                 user: CURRENT_USER.name,
@@ -100,7 +100,7 @@ export default function AdjustmentsPage() {
             ...e,
             stage: 'Posted' as const,
             auditHistory: [
-              ...e.auditHistory,
+              ...(e.auditHistory || []),
               {
                 action: 'Posted',
                 user: CURRENT_USER.name,
@@ -237,7 +237,7 @@ export default function AdjustmentsPage() {
           <div className="divide-y divide-[#E3E6EB] overflow-y-auto max-h-[640px]">
             {filteredEntries.map((entry) => {
               const isSelected = entry.id === selectedEntry?.id;
-              const entryAmount = entry.lines.reduce((s, l) => s + l.debitCents, 0);
+              const entryAmount = entry.lines.reduce((s: number, l: any) => s + (l.debitCents || 0), 0);
 
               return (
                 <div
@@ -343,7 +343,7 @@ export default function AdjustmentsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E3E6EB]">
-                  {selectedEntry.lines.map((line) => (
+                  {selectedEntry.lines.map((line: any) => (
                     <tr key={line.id} className="hover:bg-[#F8F9FA]/60">
                       <td className="px-3 py-3 font-mono-numbers font-semibold text-[#1E4FD8]">
                         {line.accountCode}
@@ -421,7 +421,7 @@ export default function AdjustmentsPage() {
                 Append-only Audit Trail
               </span>
               <div className="flex flex-col gap-2">
-                {selectedEntry.auditHistory.map((step, idx) => (
+                {(selectedEntry.auditHistory || []).map((step: any, idx: number) => (
                   <div
                     key={idx}
                     className="p-3 rounded-[10px] bg-[#F8F9FA] border border-[#E3E6EB] text-xs flex flex-col gap-0.5"
@@ -430,6 +430,11 @@ export default function AdjustmentsPage() {
                       <span className="font-semibold text-[#1B2430] flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-[#1E4FD8]" />
                         <span>{step.action} by {step.user}</span>
+                        {step.user.includes('Test') && (
+                          <span className="text-[8px] font-mono font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">
+                            TEST
+                          </span>
+                        )}
                       </span>
                       <span className="font-mono-numbers text-[11px] text-[#5B6676]">
                         {step.timestamp}

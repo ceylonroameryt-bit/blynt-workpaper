@@ -1,0 +1,8 @@
+Nominal Code,Account Description,Category,Debit Amount,Credit Amount
+1000,Petty Cash,Asset,0.00,0.00
+1010,Bank Current Account,Asset,0.00,0.00
+1200,Trade Debtors Control,Asset,0.00,0.00
+2000,Trade Creditors Control,Liability,0.00,0.00
+4000,Sales Revenue,Revenue,0.00,0.00
+5000,Cost of Goods Sold,Cost of Sales,0.00,0.00
+6000,General Administrative Expenses,Overhead,0.00,0.00

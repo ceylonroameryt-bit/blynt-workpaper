@@ -1,6 +1,9 @@
-export type Framework = 'ISA' | 'US_GAAS' | 'AICPA';
+export * from './models';
 
-export type UserRole = 'preparer' | 'reviewer' | 'partner' | 'manager';
+// UI-level helpers and legacy compatibility mapped to models
+import { UserRole, CompanyType } from './models';
+
+export type Framework = 'FRS 102' | 'FRS 105' | 'IFRS' | 'Charities SORP' | 'LLP SORP' | 'ISA (UK)';
 
 export interface UserProfile {
   id: string;
@@ -10,35 +13,7 @@ export interface UserProfile {
   email: string;
   avatar: string;
   initials: string;
-}
-
-export type WorkpaperStatus =
-  | 'Reviewed'
-  | 'Prepared'
-  | 'In progress'
-  | 'Needs attention'
-  | 'Not started'
-  | 'Locked';
-
-export type EngagementStage =
-  | 'Planning'
-  | 'Fieldwork'
-  | 'Review'
-  | 'Partner sign-off'
-  | 'Locked';
-
-export interface Client {
-  id: string;
-  name: string;
-  industry: string;
-  yearEnd: string;
-  framework: Framework;
-  currentEngagementId: string;
-  stage: EngagementStage;
-  progressPercent: number;
-  openNotesCount: number;
-  leadPartner: string;
-  team: UserProfile[];
+  isTest?: boolean;
 }
 
 export interface EngagementSummary {
@@ -47,174 +22,18 @@ export interface EngagementSummary {
   clientName: string;
   period: string;
   yearEnd: string;
-  framework: Framework;
-  stage: EngagementStage;
+  framework: string;
+  stage: 'Planning' | 'Fieldwork' | 'Review' | 'Partner sign-off' | 'Locked';
   totalWorkpapers: number;
   preparedWorkpapers: number;
   reviewedWorkpapers: number;
   openReviewNotes: number;
   partnerLockStatus: 'Not started' | 'In progress' | 'Locked';
-  materialityCents: number;
-  performanceMaterialityCents: number;
+  materialityPence?: bigint;
+  performanceMaterialityPence?: bigint;
+  materialityCents?: number;
+  performanceMaterialityCents?: number;
   team: UserProfile[];
-}
-
-export interface TrialBalanceItem {
-  id: string;
-  code: string;
-  accountName: string;
-  closingBalanceCents: number; // positive = debit, negative = credit or stored as signed net
-  debitCents: number;
-  creditCents: number;
-  priorYearCents: number;
-  standardCategory: string;
-  confidenceScore: number; // 0 to 100
-  status: 'Confirmed' | 'AI suggested' | 'Needs category';
-  fsLine: string;
-  masterCode?: string;
-}
-
-export interface WorkpaperItem {
-  id: string;
-  ref: string; // e.g. "B-10", "A-01", "C-05"
-  name: string;
-  area: string; // e.g. "Cash & Cash Equivalents", "Revenue", "Prepayments"
-  preparer: string;
-  reviewer?: string;
-  status: WorkpaperStatus;
-  notesCount: number;
-  updatedAt: string;
-  flaggedByAi?: boolean;
-  aiFlagReason?: string;
-}
-
-export interface OutstandingCheckItem {
-  id: string;
-  reference: string;
-  date: string;
-  payee: string;
-  amountCents: number;
-  tickmark?: string;
-  clearedSubsequentDate?: string;
-  hasReviewNote?: boolean;
-  reviewNoteText?: string;
-}
-
-export interface DepositInTransitItem {
-  id: string;
-  reference: string;
-  date: string;
-  description: string;
-  amountCents: number;
-  tickmark?: string;
-  clearedSubsequentDate?: string;
-}
-
-export interface ProcedureCheckItem {
-  id: string;
-  title: string;
-  description: string;
-  status: 'Done' | 'Pending' | 'Flagged';
-  completedBy?: string;
-  completedAt?: string;
-}
-
-export interface BankRecWorkpaperData {
-  id: string;
-  ref: string;
-  title: string;
-  status: WorkpaperStatus;
-  lastUpdated: string;
-  currency: string;
-  // Summary Grid Amounts in integer cents
-  ledgerBalanceCents: number;
-  bankBalanceCents: number;
-  outstandingChequesTotalCents: number;
-  depositsInTransitTotalCents: number;
-  adjustedBankBalanceCents: number;
-  differenceCents: number;
-  ties: boolean;
-  
-  // Lists
-  outstandingCheques: OutstandingCheckItem[];
-  depositsInTransit: DepositInTransitItem[];
-  procedures: ProcedureCheckItem[];
-  
-  // Conclusion & AI
-  conclusionText: string;
-  aiSuggestedConclusion: string;
-  
-  // Evidence & Lineage
-  evidence: {
-    documentName: string;
-    page: number;
-    extractedValueCents: number;
-    matchStatus: string;
-    sourceSnippet: string;
-  };
-  aiLineage: {
-    sourceFile: string;
-    pageNumber: number;
-    locationDescription: string;
-    promptVersion: string;
-    acceptedBy: string;
-    acceptedAt: string;
-    confidence: number;
-  };
-}
-
-export interface ReviewNoteItem {
-  id: string;
-  workpaperId: string;
-  workpaperRef: string;
-  workpaperTitle: string;
-  cellRef?: string;
-  author: UserProfile;
-  content: string;
-  createdAt: string;
-  status: 'Open' | 'Waiting on me' | 'Cleared';
-  replies: {
-    id: string;
-    author: UserProfile;
-    content: string;
-    createdAt: string;
-  }[];
-}
-
-export interface AdjustingEntryLine {
-  id: string;
-  accountCode: string;
-  accountName: string;
-  debitCents: number;
-  creditCents: number;
-  description: string;
-}
-
-export interface AdjustingJournalEntry {
-  id: string;
-  reference: string; // e.g. "AJE-004"
-  title: string;
-  date: string;
-  stage: 'Proposed' | 'Approved' | 'Posted';
-  reason: string;
-  supportDocument: string;
-  impactSummary: string;
-  preparedBy: string;
-  approvedBy?: string;
-  lines: AdjustingEntryLine[];
-  auditHistory: {
-    action: string;
-    user: string;
-    timestamp: string;
-    note?: string;
-  }[];
-}
-
-export interface SignoffStage {
-  role: 'Preparer' | 'Reviewer' | 'Partner lock';
-  personName?: string;
-  signedAt?: string;
-  status: 'Done' | 'Pending' | 'Blocked';
 }
 
 export interface LockBlockerItem {
@@ -226,24 +45,186 @@ export interface LockBlockerItem {
   fixHref: string;
 }
 
+export interface WorkpaperItem {
+  id: string;
+  ref: string;
+  name: string;
+  area: string;
+  preparer: string;
+  reviewer: string;
+  status: string;
+  notesCount: number;
+  updatedAt: string;
+  flaggedByAi?: boolean;
+  aiSuggestedStatus?: string;
+  aiFlagReason?: string;
+  templateId?: string;
+}
+
+export interface ProcedureCheckItem {
+  id: string;
+  title: string;
+  description?: string;
+  status: 'Done' | 'Pending' | 'Not applicable';
+  completedBy?: string;
+  completedAt?: string;
+  notApplicableReason?: string;
+}
+
+export interface BankRecWorkpaperData {
+  id: string;
+  ref: string;
+  title: string;
+  area?: string;
+  standardRef?: string;
+  framework?: string;
+  businessType?: string;
+  tbBindings?: string[];
+  ledgerBalanceCents?: number;
+  bankBalanceCents?: number;
+  adjustedBankBalanceCents?: number;
+  outstandingChequesTotalCents?: number;
+  depositsInTransitTotalCents?: number;
+  differenceCents?: number;
+  ties?: boolean;
+  procedures?: ProcedureCheckItem[];
+  scheduleRows?: any[];
+  conclusionText?: string;
+  aiSuggestedConclusion?: string;
+  evidence?: any;
+  aiLineage?: any;
+  [key: string]: any;
+}
+
+export interface TrialBalanceItem {
+  id: string;
+  code: string;
+  name?: string;
+  accountName?: string;
+  type?: string;
+  leadSchedule?: string;
+  workpaperRef?: string;
+  closingBalanceCents?: number;
+  debitCents?: number;
+  creditCents?: number;
+  priorYearCents?: number;
+  draftTbCents?: number;
+  adjustmentsCents?: number;
+  auditedCents?: number;
+  variancePercent?: number;
+  varianceExplanation?: string;
+  status?: string;
+  commentsCount?: number;
+  standardCategory?: string;
+  confidenceScore?: number;
+  fsLine?: string;
+  masterCode?: string;
+  [key: string]: any;
+}
+
+export interface ReviewNoteItem {
+  id: string;
+  workpaperId: string;
+  workpaperRef: string;
+  workpaperName?: string;
+  workpaperTitle?: string;
+  cellRef?: string;
+  author: UserProfile | { name?: string; avatar?: string; title?: string; role?: string } | any;
+  authorRole?: string;
+  authorAvatar?: string;
+  createdAt: string;
+  text?: string;
+  content?: string;
+  status: 'Open' | 'Resolved' | 'In discussion' | 'Waiting on client' | 'Waiting on me' | 'Cleared' | string;
+  priority?: 'High' | 'Medium' | 'Low';
+  category?: 'Documentation' | 'Calculation' | 'Compliance' | 'Evidence';
+  targetCellOrField?: string;
+  anchor?: any;
+  replies?: Array<{
+    id: string;
+    author: UserProfile | { name?: string; avatar?: string; title?: string; role?: string } | any;
+    authorRole?: string;
+    authorAvatar?: string;
+    createdAt: string;
+    text?: string;
+    content?: string;
+    [key: string]: any;
+  }>;
+  [key: string]: any;
+}
+
+export interface AdjustingJournalEntry {
+  id: string;
+  ref?: string;
+  reference?: string;
+  narrative?: string;
+  title?: string;
+  date?: string;
+  reason?: string;
+  stage: 'Proposed' | 'Approved' | 'Posted' | 'Rejected';
+  proposedBy?: string;
+  proposedAt?: string;
+  preparedBy?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  supportDocument?: string;
+  impactSummary?: string;
+  workpaperRef?: string;
+  lines: Array<{
+    id: string;
+    accountCode: string;
+    accountName: string;
+    description?: string;
+    debitCents: number;
+    creditCents: number;
+    debit_p?: string;
+    credit_p?: string;
+    [key: string]: any;
+  }>;
+  auditTrail?: any[];
+  auditHistory?: any[];
+  [key: string]: any;
+}
+
 export interface TemplateCardItem {
   id: string;
   name: string;
   area: string;
+  leadRef: string;
+  version: string | number;
+  framework?: string;
+  standardRef?: string;
+  businessType?: string;
   description: string;
-  version: string;
-  category: 'Built-in' | 'Your firm' | 'Drafts';
-  icon: string;
-  proceduresCount: number;
-  checksCount: number;
+  builtIn?: boolean;
+  status?: string;
+  usedByCount?: number;
+  applicableCompanyTypes?: string[];
+  badges?: string[];
+  tbBindings?: string[];
+  keyProcedures?: string[];
+  [key: string]: any;
 }
 
 export interface AuditLogItem {
   id: string;
   timestamp: string;
-  user: string;
-  role: string;
+  user?: string;
+  userName?: string;
+  role?: string;
+  userRole?: string;
   action: string;
-  details: string;
-  entity: string;
+  details?: string;
+  entity?: string;
+  category?: string;
+  entityType?: string;
+  entityName?: string;
+  engagementName?: string;
+  ipAddress?: string;
+  checksum?: string;
+  actor_id?: string;
+  action_type?: string;
+  before?: any;
+  after?: any;
+  [key: string]: any;
 }

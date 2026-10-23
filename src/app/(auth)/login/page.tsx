@@ -4,262 +4,301 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  Briefcase,
-  CheckCircle2,
-  Lock,
-  ArrowRight,
   ShieldCheck,
-  FileSpreadsheet,
+  CheckCircle2,
   Sparkles,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  ArrowRight,
 } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { Field, Input } from '@/components/ui/Field';
+import { BlyntLogo } from '@/components/ui/BlyntLogo';
+import { db } from '@/lib/server/db';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('sam.rivera@vanguard-audit.com');
-  const [password, setPassword] = useState('••••••••••••');
+  const [email, setEmail] = useState('sam@blynt-practice.co.uk');
+  const [password, setPassword] = useState('password123');
+  const [showPassword, setShowPassword] = useState(false);
   const [keepSignedIn, setKeepSignedIn] = useState(true);
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [isLockedOut, setIsLockedOut] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [mfaStep, setMfaStep] = useState(false);
+  const [totpCode, setTotpCode] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    router.push('/clients');
+    if (isLockedOut) return;
+
+    if (failedAttempts >= 4) {
+      setIsLockedOut(true);
+      setErrorMessage('Account temporarily locked out due to multiple failed attempts. Try again in 15 minutes.');
+      return;
+    }
+
+    if (!email || !password) {
+      setErrorMessage('Please enter both your work email and password.');
+      return;
+    }
+
+    // Check user
+    const user = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    if (!user) {
+      setFailedAttempts((prev) => prev + 1);
+      setErrorMessage(`Invalid credentials. ${4 - failedAttempts} attempts remaining before temporary lock.`);
+      return;
+    }
+
+    if (user.mfa_enabled && !mfaStep) {
+      setMfaStep(true);
+      setErrorMessage('');
+      return;
+    }
+
+    // Set cookie and navigate
+    document.cookie = `blynt_session=sess_${user.id}; path=/; max-age=86400`;
+    router.push('/');
+  };
+
+  const handleVerifyMfa = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (totpCode.trim().length === 6) {
+      document.cookie = `blynt_session=sess_mfa_ok; path=/; max-age=86400`;
+      router.push('/');
+    } else {
+      setErrorMessage('Please enter a valid 6-digit authenticator code.');
+    }
   };
 
   return (
-    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-white text-[#1B2430]">
-      {/* Left Column: Auth Form */}
-      <div className="lg:col-span-6 xl:col-span-5 flex flex-col justify-between p-8 sm:p-12 lg:p-16">
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#F6F7FB] text-[#102654]">
+      {/* Brand Panel Left (Blynt Navy) */}
+      <div className="lg:col-span-6 xl:col-span-5 bg-[#0B1B3D] text-white p-8 sm:p-12 lg:p-16 flex flex-col justify-between">
         <div>
-          {/* Logo */}
-          <Link href="/clients" className="flex items-center gap-2.5 mb-12">
-            <div className="w-9 h-9 rounded-[10px] bg-[#1E4FD8] flex items-center justify-center text-white font-bold">
-              <Briefcase className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-semibold text-lg tracking-tight text-[#1B2430]">
-                Workpapers
-              </span>
-              <span className="text-[10px] uppercase font-bold tracking-wider text-[#5B6676]">
-                Audit Platform
-              </span>
-            </div>
-          </Link>
+          {/* Blynt Logo */}
+          <div className="mb-16">
+            <BlyntLogo variant="full" theme="dark" size="lg" />
+          </div>
 
-          <div className="max-w-[400px]">
-            <h1 className="text-[28px] font-semibold text-[#1B2430] tracking-tight">
-              Welcome back
+          <div className="max-w-[420px]">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#FF7D6B] bg-[#102654] px-3 py-1 rounded-full border border-[#FF7D6B]/30 inline-block mb-4">
+              UK Cloud Accounting &amp; Workpapers
+            </span>
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white leading-tight mb-4">
+              Financial workpapers built with zero fluff
             </h1>
-            <p className="text-sm text-[#5B6676] mt-2 mb-8">
-              Sign in to access your audit engagements and working papers.
+            <p className="text-sm text-[#A6B4D0] leading-relaxed mb-8">
+              One unified Blynt account for client bookkeeping, VAT, annual statutory accounts, and transparent working papers.
             </p>
 
-            {/* Social / SSO Auth Buttons */}
-            <div className="flex flex-col gap-3 mb-6">
-              <button
-                type="button"
-                onClick={() => router.push('/clients')}
-                className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-[#D5D9E0] bg-white text-sm font-medium text-[#1B2430] hover:bg-[#F4F5F7] flex items-center justify-center gap-3 transition-colors focus-visible:outline-2 focus-visible:outline-[#1E4FD8] focus-visible:outline-offset-2"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 10.03 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                  />
-                </svg>
-                <span>Continue with Google</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => router.push('/clients')}
-                className="w-full min-h-[44px] px-4 py-2.5 rounded-[10px] border border-[#D5D9E0] bg-white text-sm font-medium text-[#1B2430] hover:bg-[#F4F5F7] flex items-center justify-center gap-3 transition-colors focus-visible:outline-2 focus-visible:outline-[#1E4FD8] focus-visible:outline-offset-2"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 23 23">
-                  <path fill="#f35325" d="M1 1h10v10H1z" />
-                  <path fill="#81bc06" d="M12 1h10v10H12z" />
-                  <path fill="#05a6f0" d="M1 12h10v10H1z" />
-                  <path fill="#ffba08" d="M12 12h10v10H12z" />
-                </svg>
-                <span>Continue with Microsoft</span>
-              </button>
-            </div>
-
-            <div className="relative my-6 flex items-center justify-center">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-[#E3E6EB]" />
+            <div className="flex flex-col gap-3.5 text-xs text-[#A6B4D0]">
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong className="text-white">Strict integer pence precision</strong>: Zero floating-point rounding anomalies.
+                </span>
               </div>
-              <span className="relative bg-white px-3 text-xs uppercase tracking-wider text-[#5B6676]">
-                or work email
-              </span>
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong className="text-white">AI suggests, people decide</strong>: Full lineage and explicit named sign-offs.
+                </span>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong className="text-white">Cryptographic append-only audit log</strong>: Full compliance with ISA (UK) 230.
+                </span>
+              </div>
             </div>
+          </div>
+        </div>
 
-            {/* Form */}
+        <div className="pt-8 border-t border-[#102654] text-xs text-[#7E8DA6] flex items-center justify-between">
+          <span>Blynt Technologies UK Ltd</span>
+          <span>SOC 2 Type II • WCAG 2.2 AA</span>
+        </div>
+      </div>
+
+      {/* Form Right */}
+      <div className="lg:col-span-6 xl:col-span-7 bg-white p-8 sm:p-12 lg:p-16 flex flex-col justify-center items-center">
+        <div className="max-w-[420px] w-full">
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold tracking-tight text-[#102654]">
+              {mfaStep ? 'Two-factor authentication' : 'Sign in to Blynt Workpapers'}
+            </h2>
+            <p className="text-xs text-[#5B6478] mt-1.5">
+              {mfaStep
+                ? 'Enter the 6-digit code from your authenticator app (Google Authenticator, 1Password, or Authy).'
+                : 'Use your Blynt accounting credentials to access your engagements.'}
+            </p>
+          </div>
+
+          {/* Quick Sandbox Login Buttons */}
+          <div className="mb-6 p-3 bg-[#F6F7FB] border border-[#E3E7EF] rounded-[14px]">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#5B6478] mb-2 flex items-center justify-between">
+              <span>Quick Test Personas</span>
+              <span className="text-[#B8432F] font-bold">1-Click</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { name: 'Sam Rivera', role: 'Reviewer', email: 'sam@blynt-practice.co.uk' },
+                { name: 'Anika Kapoor', role: 'Preparer', email: 'anika@blynt-practice.co.uk' },
+                { name: 'Priya Lal', role: 'Partner', email: 'priya@blynt-practice.co.uk' },
+              ].map((p) => (
+                <button
+                  key={p.email}
+                  type="button"
+                  onClick={() => {
+                    setEmail(p.email);
+                    setPassword('password123');
+                    setMfaStep(false);
+                    setErrorMessage('');
+                  }}
+                  className={`p-2 rounded-[10px] text-left border text-xs transition-colors cursor-pointer ${
+                    email === p.email
+                      ? 'bg-white border-[#102654] shadow-xs font-semibold'
+                      : 'bg-white/80 border-[#D5DBE7] hover:bg-white'
+                  }`}
+                >
+                  <div className="text-[11px] text-[#102654] truncate">{p.name.split(' ')[0]}</div>
+                  <div className="text-[9px] text-[#5B6478]">{p.role}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {errorMessage && (
+            <div
+              role="alert"
+              className="p-3 mb-4 rounded-[10px] bg-[#FDECEA] border border-[#B42318]/30 text-[#B42318] text-xs flex items-center gap-2"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {!mfaStep ? (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              <Field label="Work Email" htmlFor="login-email">
-                <Input
-                  id="login-email"
+              <div>
+                <label
+                  htmlFor="work-email"
+                  className="block text-xs font-semibold text-[#102654] mb-1.5"
+                >
+                  Work email
+                </label>
+                <input
+                  id="work-email"
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@firm.com"
+                  placeholder="name@firm.co.uk"
+                  className="w-full min-h-[44px] px-3.5 text-xs bg-[#F6F7FB] border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] focus:ring-2 focus:ring-[#FF7D6B]/20"
                 />
-              </Field>
+              </div>
 
-              <Field label="Password" htmlFor="login-password">
-                <Input
-                  id="login-password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="work-password"
+                    className="block text-xs font-semibold text-[#102654]"
+                  >
+                    Password
+                  </label>
+                  <Link
+                    href="/forgot-password"
+                    className="text-xs text-[#B8432F] hover:underline font-medium"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
+                <div className="relative">
+                  <input
+                    id="work-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full min-h-[44px] px-3.5 pr-10 text-xs bg-[#F6F7FB] border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] focus:ring-2 focus:ring-[#FF7D6B]/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#5B6478] hover:text-[#102654] p-1"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
 
               <div className="flex items-center justify-between text-xs mt-1">
-                <label className="flex items-center gap-2 cursor-pointer select-none text-[#1B2430]">
+                <label className="flex items-center gap-2 cursor-pointer select-none text-[#102654]">
                   <input
                     type="checkbox"
                     checked={keepSignedIn}
                     onChange={(e) => setKeepSignedIn(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#D5D9E0] text-[#1E4FD8] focus:ring-[#1E4FD8]"
+                    className="w-4 h-4 rounded border-[#D5DBE7] text-[#102654] focus:ring-[#FF7D6B]"
                   />
                   <span>Keep me signed in</span>
                 </label>
-                <a
-                  href="#forgot"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    alert('Password reset link sent to work email.');
-                  }}
-                  className="text-[#1E4FD8] hover:underline font-medium"
-                >
-                  Forgot password?
-                </a>
               </div>
 
-              <div className="mt-4">
-                <Button type="submit" variant="primary" className="w-full" size="md">
-                  Sign in
-                </Button>
-              </div>
+              <button
+                type="submit"
+                disabled={isLockedOut}
+                className="w-full min-h-[44px] bg-[#102654] hover:bg-[#0B1B3D] text-white font-bold text-xs rounded-[10px] shadow-sm transition-transform active:scale-[0.99] cursor-pointer mt-2 disabled:opacity-50"
+              >
+                Sign in
+              </button>
             </form>
-
-            <div className="mt-6 text-sm text-[#5B6676] text-center">
-              Don’t have an account?{' '}
-              <Link href="/signup" className="text-[#1E4FD8] font-semibold hover:underline">
-                Create firm account
-              </Link>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer links */}
-        <div className="mt-12 pt-6 border-t border-[#E3E6EB] flex items-center gap-6 text-xs text-[#5B6676]">
-          <span>© 2026 Workpapers Inc.</span>
-          <a href="#privacy" className="hover:text-[#1B2430]">
-            Privacy Policy
-          </a>
-          <a href="#terms" className="hover:text-[#1B2430]">
-            Terms of Service
-          </a>
-          <a href="#security" className="hover:text-[#1B2430]">
-            Security & SOC 2
-          </a>
-        </div>
-      </div>
-
-      {/* Right Column: Soft Blue Panel with Preview Card */}
-      <div className="hidden lg:flex lg:col-span-6 xl:col-span-7 bg-[#E9EFFD] p-12 lg:p-16 flex-col justify-between border-l border-[#D5D9E0]/50">
-        <div className="max-w-[560px]">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white text-[#1E4FD8] text-xs font-semibold mb-6 border border-[#E3E6EB]">
-            <Sparkles className="w-3.5 h-3.5 text-[#5B3FD0]" />
-            <span>AI-Assisted Working Papers (ISA & GAAS Compliant)</span>
-          </div>
-
-          <h2 className="text-3xl xl:text-4xl font-semibold text-[#1B2430] tracking-tight leading-tight mb-6">
-            Audit files that build themselves
-          </h2>
-
-          <div className="flex flex-col gap-4 text-sm text-[#5B6676] mb-10">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="w-5 h-5 text-[#0B6B4D] shrink-0 mt-0.5" />
-              <span>
-                <strong className="text-[#1B2430]">Automatic lead schedules & mappings</strong>:
-                Trial balances are ingested and mapped to standard master chart of accounts in seconds.
-              </span>
-            </div>
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="w-5 h-5 text-[#0B6B4D] shrink-0 mt-0.5" />
-              <span>
-                <strong className="text-[#1B2430]">Substantive tie-outs with full evidence lineage</strong>:
-                Every formula, bank confirmation, and tickmark links directly to underlying PDFs.
-              </span>
-            </div>
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="w-5 h-5 text-[#0B6B4D] shrink-0 mt-0.5" />
-              <span>
-                <strong className="text-[#1B2430]">Continuous review & multi-tier sign-off</strong>:
-                Preparer, manager, and engagement partner approvals with immutable audit logs.
-              </span>
-            </div>
-          </div>
-
-          {/* Small Reconciliation Preview Card */}
-          <div className="bg-white rounded-[14px] border border-[#E3E6EB] p-5">
-            <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#E3E6EB]">
-              <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-4 h-4 text-[#1E4FD8]" />
-                <span className="text-xs font-semibold text-[#1B2430]">
-                  WP B-10 • Bank Reconciliation Preview
-                </span>
+          ) : (
+            <form onSubmit={handleVerifyMfa} className="flex flex-col gap-4">
+              <div>
+                <label
+                  htmlFor="totp-code"
+                  className="block text-xs font-semibold text-[#102654] mb-1.5"
+                >
+                  6-digit security code
+                </label>
+                <input
+                  id="totp-code"
+                  type="text"
+                  maxLength={6}
+                  autoFocus
+                  required
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
+                  placeholder="123456"
+                  className="w-full min-h-[44px] px-3.5 text-center font-mono text-base tracking-widest bg-[#F6F7FB] border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B]"
+                />
               </div>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#E2F4EC] text-[#0B6B4D]">
-                Ties ($0.00)
-              </span>
-            </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs mb-3 font-mono-numbers">
-              <div className="p-2.5 rounded-lg bg-[#F4F5F7]">
-                <div className="text-[10px] uppercase font-sans font-semibold text-[#5B6676]">
-                  General Ledger Balance
-                </div>
-                <div className="text-sm font-semibold text-[#1B2430] mt-0.5">$118,402.17</div>
-              </div>
-              <div className="p-2.5 rounded-lg bg-[#F4F5F7]">
-                <div className="text-[10px] uppercase font-sans font-semibold text-[#5B6676]">
-                  Adjusted Bank Balance
-                </div>
-                <div className="text-sm font-semibold text-[#1B2430] mt-0.5">$118,402.17</div>
-              </div>
-            </div>
+              <button
+                type="submit"
+                className="w-full min-h-[44px] bg-[#102654] hover:bg-[#0B1B3D] text-white font-bold text-xs rounded-[10px] shadow-sm cursor-pointer mt-2"
+              >
+                Verify &amp; continue
+              </button>
 
-            <div className="flex items-center justify-between text-xs text-[#5B6676] pt-1 border-t border-[#E3E6EB]/60">
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-[#0B6B4D]" />
-                <span>3 outstanding cheques verified</span>
-              </span>
-              <span className="font-mono-numbers">ISA 505 Agrees</span>
-            </div>
+              <button
+                type="button"
+                onClick={() => setMfaStep(false)}
+                className="text-xs text-[#5B6478] hover:text-[#102654] text-center"
+              >
+                ← Back to email sign in
+              </button>
+            </form>
+          )}
+
+          <div className="mt-8 pt-6 border-t border-[#E3E7EF] text-center text-xs text-[#5B6478]">
+            Need a practice account?{' '}
+            <Link href="/signup" className="text-[#B8432F] font-bold hover:underline">
+              Create a firm account
+            </Link>
           </div>
-        </div>
-
-        <div className="text-xs text-[#5B6676] pt-6 flex items-center justify-between">
-          <span>Trusted by top 50 accounting & audit networks worldwide</span>
-          <span className="font-mono-numbers">ISO 27001 • SOC 2 Type II</span>
         </div>
       </div>
     </div>

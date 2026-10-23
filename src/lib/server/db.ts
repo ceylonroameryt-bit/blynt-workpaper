@@ -1,0 +1,976 @@
+import crypto from 'crypto';
+import {
+  Firm,
+  User,
+  Membership,
+  UserRole,
+  Client,
+  Engagement,
+  BlyntAccount,
+  MappingList,
+  MappingRule,
+  TbSnapshot,
+  TbLine,
+  AccountMapping,
+  Adjustment,
+  AdjustmentLine,
+  Template,
+  Workpaper,
+  Procedure,
+  Comment,
+  CommentReply,
+  Attachment,
+  AttachmentLink,
+  Signoff,
+  ViewPrefs,
+  AuditLog,
+  AiLineage,
+  CompanyType,
+} from '../types/models';
+import { toPence, sumPence } from '../money';
+
+export interface ServerSession {
+  user: User;
+  membership: Membership;
+}
+
+// In-Memory Database with strict RLS (firm_id) and insert-only audit log
+class Database {
+  firms: Firm[] = [];
+  users: User[] = [];
+  memberships: Membership[] = [];
+  clients: Client[] = [];
+  engagements: Engagement[] = [];
+  blynt_accounts: BlyntAccount[] = [];
+  mapping_lists: MappingList[] = [];
+  mapping_rules: MappingRule[] = [];
+  tb_snapshots: TbSnapshot[] = [];
+  tb_lines: TbLine[] = [];
+  account_mappings: AccountMapping[] = [];
+  adjustments: Adjustment[] = [];
+  templates: Template[] = [];
+  workpapers: Workpaper[] = [];
+  procedures: Procedure[] = [];
+  comments: Comment[] = [];
+  attachments: Attachment[] = [];
+  attachment_links: AttachmentLink[] = [];
+  signoffs: Signoff[] = [];
+  view_prefs: ViewPrefs[] = [];
+  audit_logs: AuditLog[] = []; // APPEND ONLY!
+  ai_lineage: AiLineage[] = [];
+
+  constructor() {
+    this.seed();
+  }
+
+  // Ground Rule 4: Append-only audit log
+  logAudit(
+    firmId: string,
+    actor: { id: string; name: string; role: UserRole },
+    action: string,
+    entity: string,
+    entityId: string,
+    before: any = null,
+    after: any = null
+  ) {
+    const entry: AuditLog = {
+      id: `aud_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      firm_id: firmId,
+      actor_id: actor.id,
+      actor_name: actor.name,
+      actor_role: actor.role,
+      action,
+      entity,
+      entity_id: entityId,
+      before_json: before ? JSON.stringify(before) : null,
+      after_json: after ? JSON.stringify(after) : null,
+      at: new Date().toISOString(),
+    };
+    this.audit_logs.push(entry);
+    return entry;
+  }
+
+  seed() {
+    this.firms = [];
+    this.users = [];
+    this.memberships = [];
+    this.clients = [];
+    this.engagements = [];
+    this.blynt_accounts = [];
+    this.mapping_lists = [];
+    this.mapping_rules = [];
+    this.tb_snapshots = [];
+    this.tb_lines = [];
+    this.account_mappings = [];
+    this.adjustments = [];
+    this.templates = [];
+    this.workpapers = [];
+    this.procedures = [];
+    this.comments = [];
+    this.attachments = [];
+    this.attachment_links = [];
+    this.signoffs = [];
+    this.view_prefs = [];
+    this.audit_logs = [];
+    this.ai_lineage = [];
+
+    const firmId = 'firm_blynt_uk';
+    this.firms = [
+      { id: firmId, name: 'Blynt Practice & Co LLP', created_at: '2026-01-01T00:00:00Z' },
+    ];
+
+    // Users with roles (matching redesign boards: Sarah Owen SO Audit Manager, David Miller DM Partner)
+    this.users = [
+      {
+        id: 'usr_sarah',
+        email: 'sarah.owen@blynt-practice.co.uk',
+        name: 'Sarah Owen',
+        initials: 'SO',
+        title: 'Audit manager',
+        mfa_enabled: true,
+      },
+      {
+        id: 'usr_david',
+        email: 'david.miller@blynt-practice.co.uk',
+        name: 'David Miller',
+        initials: 'DM',
+        title: 'Engagement partner',
+        mfa_enabled: true,
+      },
+      {
+        id: 'usr_anika',
+        email: 'anika@blynt-practice.co.uk',
+        name: 'Anika Kapoor',
+        initials: 'AK',
+        title: 'Senior Associate (Preparer)',
+        mfa_enabled: true,
+      },
+      {
+        id: 'usr_sam',
+        email: 'sam@blynt-practice.co.uk',
+        name: 'Sam Rivera',
+        initials: 'SR',
+        title: 'Audit Manager (Reviewer)',
+        mfa_enabled: true,
+      },
+      {
+        id: 'usr_priya',
+        email: 'priya@blynt-practice.co.uk',
+        name: 'Priya Lal',
+        initials: 'PL',
+        title: 'Engagement Partner',
+        mfa_enabled: true,
+      },
+      {
+        id: 'usr_dave',
+        email: 'dave@blynt-practice.co.uk',
+        name: 'Dave Clark',
+        initials: 'DC',
+        title: 'Managing Partner (Admin)',
+        mfa_enabled: true,
+      },
+    ];
+
+    this.memberships = [
+      { user_id: 'usr_sarah', firm_id: firmId, role: 'reviewer' },
+      { user_id: 'usr_david', firm_id: firmId, role: 'partner' },
+      { user_id: 'usr_anika', firm_id: firmId, role: 'preparer' },
+      { user_id: 'usr_sam', firm_id: firmId, role: 'reviewer' },
+      { user_id: 'usr_priya', firm_id: firmId, role: 'partner' },
+      { user_id: 'usr_dave', firm_id: firmId, role: 'admin' },
+    ];
+
+    // Standard Blynt Chart of Accounts
+    this.blynt_accounts = [
+      // Assets 1000 - 1999
+      { code: '1000', name: 'Petty Cash', type: 'Asset', normal_balance: 'Debit', lead_letter: 'B', is_control: false, is_system: true },
+      { code: '1010', name: 'Barclays Current Account', type: 'Asset', normal_balance: 'Debit', lead_letter: 'B', is_control: true, is_system: true },
+      { code: '1020', name: 'Barclays Reserve Account', type: 'Asset', normal_balance: 'Debit', lead_letter: 'B', is_control: false, is_system: true },
+      { code: '1200', name: 'Trade Debtors Control', type: 'Asset', normal_balance: 'Debit', lead_letter: 'C', is_control: true, is_system: true },
+      { code: '1210', name: 'Bad Debt Provision', type: 'Asset', normal_balance: 'Credit', lead_letter: 'C', is_control: false, is_system: true },
+      { code: '1300', name: 'Finished Goods Stock', type: 'Asset', normal_balance: 'Debit', lead_letter: 'D', is_control: true, is_system: true },
+      { code: '1400', name: 'Prepayments', type: 'Asset', normal_balance: 'Debit', lead_letter: 'E', is_control: false, is_system: true },
+      { code: '1500', name: 'Plant & Equipment Cost', type: 'Asset', normal_balance: 'Debit', lead_letter: 'F', is_control: true, is_system: true },
+      { code: '1510', name: 'Computer Equipment Cost', type: 'Asset', normal_balance: 'Debit', lead_letter: 'F', is_control: false, is_system: true },
+      { code: '1520', name: 'Fixtures & Fittings Cost', type: 'Asset', normal_balance: 'Debit', lead_letter: 'F', is_control: false, is_system: true },
+      { code: '1700', name: 'Accumulated Depreciation', type: 'Asset', normal_balance: 'Credit', lead_letter: 'F', is_control: true, is_system: true },
+      { code: '1710', name: 'Computer Equip Accumulated Deprec', type: 'Asset', normal_balance: 'Credit', lead_letter: 'F', is_control: false, is_system: true },
+      { code: '1720', name: 'Fixtures & Fittings Accumulated Deprec', type: 'Asset', normal_balance: 'Credit', lead_letter: 'F', is_control: false, is_system: true },
+      // Liabilities 2000 - 2999
+      { code: '2000', name: 'Trade Creditors Control', type: 'Liability', normal_balance: 'Credit', lead_letter: 'K', is_control: true, is_system: true },
+      { code: '2100', name: 'Accruals', type: 'Liability', normal_balance: 'Credit', lead_letter: 'K', is_control: false, is_system: true },
+      { code: '2200', name: 'VAT Liability Control', type: 'Liability', normal_balance: 'Credit', lead_letter: 'T', is_control: true, is_system: true },
+      { code: '2300', name: 'PAYE & NIC Payable', type: 'Liability', normal_balance: 'Credit', lead_letter: 'T', is_control: false, is_system: true },
+      { code: '2600', name: 'Bank Loan (Long Term)', type: 'Liability', normal_balance: 'Credit', lead_letter: 'L', is_control: false, is_system: true },
+      // Equity 3000 - 3999
+      { code: '3000', name: 'Called Up Share Capital', type: 'Equity', normal_balance: 'Credit', lead_letter: 'Z', is_control: false, is_system: true },
+      { code: '3100', name: 'Profit and Loss Account (Reserves)', type: 'Equity', normal_balance: 'Credit', lead_letter: 'Z', is_control: true, is_system: true },
+      // Revenue 4000 - 4999
+      { code: '4000', name: 'Sales Revenue - UK General', type: 'Revenue', normal_balance: 'Credit', lead_letter: 'A', is_control: false, is_system: true },
+      { code: '4100', name: 'Sales Revenue - Export', type: 'Revenue', normal_balance: 'Credit', lead_letter: 'A', is_control: false, is_system: true },
+      // Cost of Sales 5000 - 5999
+      { code: '5000', name: 'Direct Materials & Components', type: 'Cost of Sales', normal_balance: 'Debit', lead_letter: 'A', is_control: false, is_system: true },
+      { code: '5100', name: 'Direct Subcontract Wages', type: 'Cost of Sales', normal_balance: 'Debit', lead_letter: 'A', is_control: false, is_system: true },
+      // Overheads 6000 - 6999
+      { code: '6000', name: 'Office Rent & Rates', type: 'Overhead', normal_balance: 'Debit', lead_letter: 'E', is_control: false, is_system: true },
+      { code: '6100', name: 'Light, Heat & Power', type: 'Overhead', normal_balance: 'Debit', lead_letter: 'E', is_control: false, is_system: true },
+      { code: '6200', name: 'Staff Salaries', type: 'Overhead', normal_balance: 'Debit', lead_letter: 'T', is_control: false, is_system: true },
+      { code: '6900', name: 'Depreciation Charge for Year', type: 'Overhead', normal_balance: 'Debit', lead_letter: 'F', is_control: true, is_system: true },
+      { code: '6950', name: 'Loss / (Profit) on Disposal of Assets', type: 'Overhead', normal_balance: 'Debit', lead_letter: 'F', is_control: false, is_system: true },
+    ];
+
+    // Clients matching redesign boards
+    const clientId = 'cli_harlow';
+    this.clients = [
+      {
+        id: 'cli_acme',
+        firm_id: firmId,
+        name: 'Acme Corp Ltd',
+        company_no: '09876543',
+        company_type: 'Small company (FRS 102 1A)',
+        year_end: '2026-03-31',
+        data_source: 'xero',
+        reconnect_needed: false,
+      },
+      {
+        id: 'cli_northwind',
+        firm_id: firmId,
+        name: 'Northwind LLP',
+        company_no: 'OC345678',
+        company_type: 'LLP (FRS 102 + LLP SORP)',
+        year_end: '2026-02-28',
+        data_source: 'quickbooks',
+        reconnect_needed: false,
+      },
+      {
+        id: 'cli_demo',
+        firm_id: firmId,
+        name: 'Demo Consulting Ltd',
+        company_no: '12345678',
+        company_type: 'Micro-entity (FRS 105)',
+        year_end: '2026-04-30',
+        data_source: 'csv',
+        reconnect_needed: false,
+      },
+      {
+        id: 'cli_riverside',
+        firm_id: firmId,
+        name: 'Riverside Community Trust',
+        company_no: 'CE012345',
+        company_type: 'Charity (SORP)',
+        year_end: '2026-05-31',
+        data_source: 'freeagent',
+        reconnect_needed: false,
+      },
+      {
+        id: clientId,
+        firm_id: firmId,
+        name: 'Harlow & Finch Ltd',
+        company_no: '09876543',
+        company_type: 'Small company (FRS 102 1A)',
+        year_end: '2026-09-30',
+        data_source: 'csv',
+        reconnect_needed: false,
+      },
+      {
+        id: 'cli_apex',
+        firm_id: firmId,
+        name: 'Apex Manufacturing Ltd',
+        company_no: '04561234',
+        company_type: 'Medium/large (FRS 102)',
+        year_end: '2026-12-31',
+        data_source: 'sage',
+        reconnect_needed: false,
+      },
+      {
+        id: 'cli_bluecrest',
+        firm_id: firmId,
+        name: 'Bluecrest Holdings PLC',
+        company_no: '11223344',
+        company_type: 'IFRS company/group',
+        year_end: '2026-09-30',
+        data_source: 'quickbooks',
+        reconnect_needed: true,
+      },
+    ];
+
+    // Prior year engagement
+    const priorEngId = 'eng_harlow_fy25';
+    this.engagements.push({
+      id: priorEngId,
+      client_id: clientId,
+      firm_id: firmId,
+      period_start: '2024-10-01',
+      period_end: '2025-09-30',
+      framework: 'FRS 102 1A',
+      template_pack_id: 'pack_small_co',
+      status: 'locked',
+      locked_at: '2025-11-15T14:30:00Z',
+      locked_by: 'usr_priya',
+      prior_engagement_id: null,
+    });
+
+    // Current engagement (Harlow)
+    const engId = 'eng_harlow_fy26';
+    this.engagements.push({
+      id: engId,
+      client_id: clientId,
+      firm_id: firmId,
+      period_start: '2025-10-01',
+      period_end: '2026-09-30',
+      framework: 'FRS 102 1A',
+      template_pack_id: 'pack_small_co',
+      status: 'fieldwork',
+      locked_at: null,
+      prior_engagement_id: priorEngId,
+    });
+
+    // Acme Corp Ltd engagement (matches redesign boards)
+    const acmeEngId = 'eng_acme_fy26';
+    this.engagements.push({
+      id: acmeEngId,
+      client_id: 'cli_acme',
+      firm_id: firmId,
+      period_start: '2025-04-01',
+      period_end: '2026-03-31',
+      framework: 'FRS 102 1A',
+      template_pack_id: 'pack_small_co',
+      status: 'fieldwork',
+      locked_at: null,
+      prior_engagement_id: null,
+    });
+
+    // Northwind LLP engagement
+    this.engagements.push({
+      id: 'eng_northwind_fy26',
+      client_id: 'cli_northwind',
+      firm_id: firmId,
+      period_start: '2025-03-01',
+      period_end: '2026-02-28',
+      framework: 'FRS 102 + LLP SORP',
+      template_pack_id: 'pack_llp',
+      status: 'review',
+      locked_at: null,
+      prior_engagement_id: null,
+    });
+
+    // Demo Consulting Ltd engagement
+    this.engagements.push({
+      id: 'eng_demo_fy26',
+      client_id: 'cli_demo',
+      firm_id: firmId,
+      period_start: '2025-05-01',
+      period_end: '2026-04-30',
+      framework: 'FRS 105',
+      template_pack_id: 'pack_micro',
+      status: 'fieldwork',
+      locked_at: null,
+      prior_engagement_id: null,
+    });
+
+    // Riverside Community Trust engagement
+    this.engagements.push({
+      id: 'eng_riverside_fy26',
+      client_id: 'cli_riverside',
+      firm_id: firmId,
+      period_start: '2025-06-01',
+      period_end: '2026-05-31',
+      framework: 'Charities SORP (FRS 102)',
+      template_pack_id: 'pack_charity',
+      status: 'planning',
+      locked_at: null,
+      prior_engagement_id: null,
+    });
+
+    // Templates: F-10 Fixed Assets & B-10 Bank Rec
+    this.templates = [
+      {
+        id: 'tpl_f10',
+        key: 'fixed-assets-register',
+        name: 'Fixed assets: register and depreciation',
+        area_letter: 'F',
+        company_types: [
+          'Small company (FRS 102 1A)',
+          'Medium/large (FRS 102)',
+          'Micro-entity (FRS 105)',
+          'LLP (FRS 102 + LLP SORP)',
+        ],
+        version: 2,
+        is_builtin: true,
+        status: 'published',
+        used_by_count: 14,
+        schema_json: {
+          key: 'fixed-assets-register',
+          area: 'F',
+          version: 2,
+          parts: {
+            objective:
+              'Verify the existence, ownership, valuation and depreciation of property, plant and equipment under FRS 102 s.17.',
+            lead: ['1500', '1700', '6900', '6950'],
+            schedule: {
+              type: 'grid',
+              rows: 'classes',
+              columns: ['cost_opening', 'cost_additions', 'cost_disposals', 'cost_closing'],
+            },
+            checks: [
+              { id: 'cost_tb', rule: 'closing_cost == tb(1500)', severity: 'blocker' },
+              { id: 'deprec_tb', rule: 'closing_depreciation == tb(1700)', severity: 'blocker' },
+              { id: 'charge_tb', rule: 'charge == tb(6900)', severity: 'blocker' },
+              { id: 'additions_evidence', rule: 'additions_have_evidence', severity: 'blocker' },
+              { id: 'disposals_evidence', rule: 'disposals_have_evidence', severity: 'blocker' },
+            ],
+            procedures: [
+              'Agree closing cost and accumulated depreciation to trial balance accounts 1500 and 1700.',
+              'Vouch all capital additions over £1,000 to purchase invoices and verify appropriate capitalisation classification.',
+              'Inspect evidence of disposal proceeds and verify calculation of profit/loss on disposal.',
+              'Perform proof in total calculation of depreciation charge based on accounting policy rates.',
+            ],
+            attachments: { required: [{ for: 'additions', over_p: 100000 }] },
+            conclusion: { required: true },
+          },
+        },
+      },
+      {
+        id: 'tpl_f10_simple',
+        key: 'fixed-assets-simple',
+        name: 'Fixed assets: simple (micro-entity)',
+        area_letter: 'F',
+        company_types: ['Micro-entity (FRS 105)'],
+        version: 1,
+        is_builtin: true,
+        status: 'published',
+        used_by_count: 5,
+        schema_json: {
+          key: 'fixed-assets-simple',
+          area: 'F',
+          version: 1,
+          parts: {
+            objective: 'Micro-entity summary verification of tangibles under FRS 105.',
+            lead: ['1500', '1700'],
+          },
+        },
+      },
+      {
+        id: 'tpl_b10',
+        key: 'bank-reconciliation',
+        name: 'Bank reconciliation and subsequent clearance',
+        area_letter: 'B',
+        company_types: [
+          'Sole trader',
+          'Partnership',
+          'LLP (FRS 102 + LLP SORP)',
+          'Micro-entity (FRS 105)',
+          'Small company (FRS 102 1A)',
+          'Medium/large (FRS 102)',
+          'IFRS company/group',
+        ],
+        version: 2,
+        is_builtin: true,
+        status: 'published',
+        used_by_count: 32,
+        schema_json: {
+          key: 'bank-reconciliation',
+          area: 'B',
+          version: 2,
+        },
+      },
+    ];
+
+    // Prior year F-10 paper (for roll forward verification)
+    const pyWorkpaperId = 'wp_py_f10';
+    this.workpapers.push({
+      id: pyWorkpaperId,
+      engagement_id: priorEngId,
+      ref: 'F-10',
+      template_id: 'tpl_f10',
+      template_version: 2,
+      status: 'signed_off',
+      rolled_from_workpaper_id: null,
+      created_at: '2025-10-10T09:00:00Z',
+      updated_at: '2025-11-14T16:00:00Z',
+      data_json: {
+        classes: [
+          {
+            name: 'Computer equipment',
+            cost_opening_p: '500000',
+            cost_additions_p: '100000',
+            cost_disposals_p: '0',
+            cost_closing_p: '600000', // £6,000
+            deprec_opening_p: '150000',
+            deprec_charge_p: '100000',
+            deprec_disposals_p: '0',
+            deprec_closing_p: '250000', // £2,500
+            nbv_this_year_p: '350000',
+            deprec_rate: '25% straight line',
+          },
+          {
+            name: 'Fixtures & fittings',
+            cost_opening_p: '450000',
+            cost_additions_p: '0',
+            cost_disposals_p: '0',
+            cost_closing_p: '450000', // £4,500
+            deprec_opening_p: '0',
+            deprec_charge_p: '90000',
+            deprec_disposals_p: '0',
+            deprec_closing_p: '90000', // £900
+            nbv_this_year_p: '360000',
+            deprec_rate: '20% straight line',
+          },
+        ],
+        summary: {
+          total_closing_cost_p: '1050000', // £10,500
+          total_closing_deprec_p: '340000', // £3,400
+          total_nbv_p: '710000', // £7,100 (matches prompt prior year NBV!)
+        },
+      },
+    });
+
+    // Current Year F-10 Workpaper matching sample data in prompt:
+    // Computer equipment: cost 6,000 + 2,400 - 1,200 = 7,200; depreciation 2,500 + 1,800 - 800 = 3,500
+    // Fixtures: cost 4,500, depreciation 900 + 900 = 1,800
+    // NBV 6,400 (last year 7,100); charge 2,700; disposal NBV 400, proceeds 250, loss 150.
+    const f10Id = 'wp_f10';
+    this.workpapers.push({
+      id: f10Id,
+      engagement_id: engId,
+      ref: 'F-10',
+      template_id: 'tpl_f10',
+      template_version: 2,
+      status: 'in_progress',
+      rolled_from_workpaper_id: pyWorkpaperId,
+      created_at: '2026-10-01T09:00:00Z',
+      updated_at: '2026-10-23T10:00:00Z',
+      data_json: {
+        objective:
+          'To test existence, valuation and completeness of tangible fixed assets, verify depreciation calculations according to disclosed policy, and vouch additions and disposals.',
+        classes: [
+          {
+            id: 'c1',
+            name: 'Computer equipment',
+            cost_opening_p: '600000',
+            cost_opening_is_py: true,
+            cost_additions_p: '240000',
+            cost_disposals_p: '120000',
+            cost_closing_p: '720000', // 6,000 + 2,400 - 1,200 = 7,200
+            deprec_opening_p: '250000',
+            deprec_opening_is_py: true,
+            deprec_charge_p: '180000',
+            deprec_disposals_p: '80000',
+            deprec_closing_p: '350000', // 2,500 + 1,800 - 800 = 3,500
+            nbv_this_year_p: '370000',
+            nbv_prior_year_p: '350000',
+            deprec_method: 'Straight line',
+            deprec_rate: '25%',
+          },
+          {
+            id: 'c2',
+            name: 'Fixtures & fittings',
+            cost_opening_p: '450000',
+            cost_opening_is_py: true,
+            cost_additions_p: '0',
+            cost_disposals_p: '0',
+            cost_closing_p: '450000', // 4,500
+            deprec_opening_p: '90000',
+            deprec_opening_is_py: true,
+            deprec_charge_p: '90000',
+            deprec_disposals_p: '0',
+            deprec_closing_p: '180000', // 900 + 900 = 1,800
+            nbv_this_year_p: '270000',
+            nbv_prior_year_p: '360000',
+            deprec_method: 'Straight line',
+            deprec_rate: '20%',
+          },
+        ],
+        additions: [
+          {
+            id: 'add_1',
+            date: '2026-03-15',
+            item: 'Dell PowerEdge R750 Server & Workstations',
+            supplier: 'Dell Technologies UK',
+            asset_class: 'Computer equipment',
+            cost_p: '240000', // £2,400.00
+            attachment_id: 'att_inv_dell',
+            invoice_ref: 'INV-DELL-9811',
+            has_evidence: true,
+          },
+        ],
+        disposals: [
+          {
+            id: 'disp_1',
+            date: '2026-06-20',
+            item: 'Legacy Apple iMac Workstations (x2)',
+            asset_class: 'Computer equipment',
+            cost_p: '120000', // £1,200.00
+            deprec_p: '80000', // £800.00
+            nbv_out_p: '40000', // £400.00
+            proceeds_p: '25000', // £250.00
+            loss_p: '15000', // £150.00 (calculated: 400 - 250)
+            attachment_id: null, // Note: Missing disposal evidence per sample data test!
+            has_evidence: false,
+          },
+        ],
+        proof_in_total: {
+          computer_expected_p: '180000',
+          fixtures_expected_p: '90000',
+          total_expected_charge_p: '270000',
+          actual_charge_p: '270000',
+          variance_p: '0',
+        },
+        conclusion: {
+          text: 'Substantive testing of tangible fixed assets was completed in accordance with FRS 102 section 17. Additions were vouched to supplier invoice. Proof in total confirms depreciation charge of £2,700.00 is mathematically sound.',
+          ai_draft:
+            '✦ suggestion: Additions of £2,400.00 vouched to invoice. Proof in total agrees to depreciation charge of £2,700.00. Outstanding item: obtain bank credit evidence for £250.00 disposal proceeds.',
+          ai_status: 'draft',
+        },
+      },
+    });
+
+    // Procedures for F-10
+    this.procedures.push(
+      {
+        id: 'proc_f10_1',
+        workpaper_id: f10Id,
+        text: 'Agree closing cost and accumulated depreciation to trial balance accounts 1500 and 1700.',
+        done_by: 'usr_anika',
+        done_at: '2026-10-23T11:00:00Z',
+        not_applicable_reason: null,
+      },
+      {
+        id: 'proc_f10_2',
+        workpaper_id: f10Id,
+        text: 'Vouch capital additions over £1,000 threshold to supplier invoices.',
+        done_by: 'usr_anika',
+        done_at: '2026-10-23T11:15:00Z',
+        not_applicable_reason: null,
+      },
+      {
+        id: 'proc_f10_3',
+        workpaper_id: f10Id,
+        text: 'Inspect evidence of disposal proceeds and verify loss calculation.',
+        done_by: null,
+        done_at: null,
+        not_applicable_reason: null,
+      },
+      {
+        id: 'proc_f10_4',
+        workpaper_id: f10Id,
+        text: 'Perform proof in total calculation of depreciation charge against policy.',
+        done_by: 'usr_anika',
+        done_at: '2026-10-23T11:30:00Z',
+        not_applicable_reason: null,
+      }
+    );
+
+    // B-10 Bank Rec Workpaper
+    const b10Id = 'wp_b10';
+    this.workpapers.push({
+      id: b10Id,
+      engagement_id: engId,
+      ref: 'B-10',
+      template_id: 'tpl_b10',
+      template_version: 2,
+      status: 'prepared',
+      rolled_from_workpaper_id: null,
+      created_at: '2026-10-01T09:00:00Z',
+      updated_at: '2026-10-23T09:42:00Z',
+      data_json: {
+        title: 'Bank reconciliation - Barclays Operating',
+        ledger_balance_p: '11840217', // £118,402.17
+        bank_balance_p: '12491817', // £124,918.17
+        outstanding_cheques_total_p: '723600', // £7,236.00
+        deposits_in_transit_total_p: '72000', // £720.00
+        adjusted_bank_balance_p: '11840217', // £118,402.17
+        difference_p: '0',
+        ties: true,
+      },
+    });
+
+    // Procedures for B-10
+    this.procedures.push(
+      {
+        id: 'proc_b10_1',
+        workpaper_id: b10Id,
+        text: 'Agree general ledger balance to trial balance line 1010 without variance.',
+        done_by: 'usr_anika',
+        done_at: '2026-10-23T09:30:00Z',
+        not_applicable_reason: null,
+      },
+      {
+        id: 'proc_b10_2',
+        workpaper_id: b10Id,
+        text: 'Agree bank statement closing balance to bank confirmation certificate.',
+        done_by: 'usr_anika',
+        done_at: '2026-10-23T09:35:00Z',
+        not_applicable_reason: null,
+      },
+      {
+        id: 'proc_b10_3',
+        workpaper_id: b10Id,
+        text: 'Inspect subsequent clearance of outstanding cheques on October statements.',
+        done_by: 'usr_anika',
+        done_at: '2026-10-23T09:40:00Z',
+        not_applicable_reason: null,
+      }
+    );
+
+    // Initial Signoff for B-10
+    this.signoffs.push({
+      id: 'sig_b10_prep',
+      workpaper_id: b10Id,
+      role: 'preparer',
+      user_id: 'usr_anika',
+      user_name: 'Anika Kapoor',
+      signed_at: '2026-10-23T09:42:00Z',
+      content_hash: 'hash_b10_v1_confirmed',
+      stale_at: null,
+    });
+
+    // Attachments
+    const dellSha = crypto.createHash('sha256').update('DELL_SERVER_INVOICE_CONTENT_FY26').digest('hex');
+    this.attachments.push({
+      id: 'att_inv_dell',
+      engagement_id: engId,
+      workpaper_id: f10Id,
+      file_key: 'uploads/harlow_fy26/Dell_PowerEdge_Invoice_9811.pdf',
+      filename: 'Dell_PowerEdge_Invoice_9811.pdf',
+      mime: 'application/pdf',
+      size: 142080,
+      sha256: dellSha,
+      category: 'Invoice',
+      is_permanent: false,
+      uploaded_by: 'usr_anika',
+      uploaded_by_name: 'Anika Kapoor',
+      uploaded_at: '2026-10-23T10:15:00Z',
+    });
+
+    // Comments & Pins
+    this.comments.push({
+      id: 'com_f10_disp',
+      workpaper_id: f10Id,
+      type: 'review_note',
+      anchor_json: { kind: 'row', table: 'disposals', row: 'disp_1' },
+      anchor_summary: 'Disposals: Legacy Apple iMac Workstations',
+      status: 'open',
+      created_by: 'usr_sam',
+      created_by_name: 'Sam Rivera',
+      created_at: '2026-10-23T11:45:00Z',
+      resolved_by: null,
+      body: 'Please attach bank statement credit or sales receipt for the £250.00 disposal proceeds before sign-off.',
+      replies: [
+        {
+          id: 'rep_1',
+          comment_id: 'com_f10_disp',
+          body: 'Client has requested the remittance advice from the equipment recycling vendor; waiting on document.',
+          mentions: ['usr_sam'],
+          created_by: 'usr_anika',
+          created_by_name: 'Anika Kapoor',
+          created_at: '2026-10-23T12:00:00Z',
+        },
+      ],
+    });
+
+    // Proposed adjustment: AJE-001 (Proposed by Anika)
+    this.adjustments.push({
+      id: 'aje_001',
+      engagement_id: engId,
+      ref: 'AJE-001',
+      narrative: 'Accrue unrecorded audit fee invoice for September 2026',
+      status: 'proposed',
+      proposed_by: 'usr_anika',
+      proposed_by_name: 'Anika Kapoor',
+      approved_by: null,
+      created_at: '2026-10-22T14:00:00Z',
+      lines: [
+        {
+          id: 'line_1',
+          adjustment_id: 'aje_001',
+          blynt_code: '6000',
+          debit_p: '500000', // £5,000.00
+          credit_p: '0',
+          narrative: 'Audit fee expense',
+        },
+        {
+          id: 'line_2',
+          adjustment_id: 'aje_001',
+          blynt_code: '2100',
+          debit_p: '0',
+          credit_p: '500000', // £5,000.00
+          narrative: 'Accruals',
+        },
+      ],
+    });
+
+    // Initial Trial Balance Snapshot for Harlow FY26
+    const snapId = 'snap_h26_01';
+    const rawData = JSON.stringify({
+      company: 'Harlow & Finch Ltd',
+      period: 'Year ended 30 Sep 2026',
+      lines: 28,
+    });
+    const snapHash = crypto.createHash('sha256').update(rawData).digest('hex');
+
+    this.tb_snapshots.push({
+      id: snapId,
+      engagement_id: engId,
+      source: 'csv',
+      as_at: '2026-09-30',
+      raw_json: rawData,
+      sha256: snapHash,
+      created_by: 'usr_anika',
+      created_at: '2026-10-01T08:00:00Z',
+    });
+
+    // Seed Trial Balance Lines & Mappings (All in Pence)
+    const seedLines: {
+      code: string;
+      name: string;
+      type: string;
+      debit_p: bigint;
+      credit_p: bigint;
+      blynt_code: string | null;
+      status: 'suggested' | 'confirmed' | 'needs_you';
+      confidence: number;
+    }[] = [
+      { code: '1010', name: 'Barclays Operating Account', type: 'Bank', debit_p: 11840217n, credit_p: 0n, blynt_code: '1010', status: 'confirmed', confidence: 100 },
+      { code: '1020', name: 'Barclays High Yield Reserve', type: 'Bank', debit_p: 35000000n, credit_p: 0n, blynt_code: '1020', status: 'confirmed', confidence: 100 },
+      { code: '1200', name: 'Sales Ledger Control Account', type: 'Current Asset', debit_p: 248950000n, credit_p: 0n, blynt_code: '1200', status: 'confirmed', confidence: 100 },
+      { code: '1210', name: 'Allowance for Doubtful Debts', type: 'Current Asset', debit_p: 0n, credit_p: 12500000n, blynt_code: '1210', status: 'confirmed', confidence: 100 },
+      { code: '1300', name: 'Finished Warehouse Stock', type: 'Current Asset', debit_p: 182400000n, credit_p: 0n, blynt_code: '1300', status: 'confirmed', confidence: 100 },
+      { code: '1410', name: 'Prepaid Commercial Rates & Insurance', type: 'Current Asset', debit_p: 3240000n, credit_p: 0n, blynt_code: '1400', status: 'confirmed', confidence: 100 },
+      { code: '1500', name: 'Plant and Warehouse Machinery Cost', type: 'Fixed Asset', debit_p: 450000000n, credit_p: 0n, blynt_code: '1500', status: 'confirmed', confidence: 100 },
+      { code: '1510', name: 'Computer Equipment at Cost', type: 'Fixed Asset', debit_p: 720000n, credit_p: 0n, blynt_code: '1500', status: 'confirmed', confidence: 100 }, // £7,200.00 matches F-10!
+      { code: '1520', name: 'Fixtures and Office Fittings Cost', type: 'Fixed Asset', debit_p: 450000n, credit_p: 0n, blynt_code: '1500', status: 'confirmed', confidence: 100 }, // £4,500.00 matches F-10!
+      { code: '1700', name: 'Plant Machinery Accumulated Deprec', type: 'Fixed Asset', debit_p: 0n, credit_p: 180000000n, blynt_code: '1700', status: 'confirmed', confidence: 100 },
+      { code: '1710', name: 'Computer Equip Accumulated Deprec', type: 'Fixed Asset', debit_p: 0n, credit_p: 350000n, blynt_code: '1700', status: 'confirmed', confidence: 100 }, // £3,500.00 matches F-10!
+      { code: '1720', name: 'Fixtures Accumulated Deprec', type: 'Fixed Asset', debit_p: 0n, credit_p: 180000n, blynt_code: '1700', status: 'confirmed', confidence: 100 }, // £1,800.00 matches F-10!
+      { code: '2000', name: 'Purchase Ledger Control Account', type: 'Current Liability', debit_p: 0n, credit_p: 168450000n, blynt_code: '2000', status: 'confirmed', confidence: 100 },
+      { code: '2100', name: 'Accrued Operating Expenses', type: 'Current Liability', debit_p: 0n, credit_p: 45200000n, blynt_code: '2100', status: 'confirmed', confidence: 100 },
+      { code: '2200', name: 'HM Revenue VAT Liability', type: 'Current Liability', debit_p: 0n, credit_p: 19820000n, blynt_code: '2200', status: 'suggested', confidence: 94 },
+      { code: '2300', name: 'PAYE / NIC Control Account', type: 'Current Liability', debit_p: 0n, credit_p: 14200000n, blynt_code: '2300', status: 'suggested', confidence: 91 },
+      { code: '3000', name: 'Ordinary Share Capital (£1 par)', type: 'Equity', debit_p: 0n, credit_p: 50000000n, blynt_code: '3000', status: 'confirmed', confidence: 100 },
+      { code: '3100', name: 'Retained Earnings Prior Periods', type: 'Equity', debit_p: 0n, credit_p: 320000000n, blynt_code: '3100', status: 'confirmed', confidence: 100 },
+      { code: '4000', name: 'Wholesale Commercial UK Sales', type: 'Revenue', debit_p: 0n, credit_p: 620000000n, blynt_code: '4000', status: 'confirmed', confidence: 100 },
+      { code: '5000', name: 'Direct Component Materials', type: 'Cost of Sales', debit_p: 380000000n, credit_p: 0n, blynt_code: '5000', status: 'confirmed', confidence: 100 },
+      { code: '6000', name: 'London Office Rent and Service', type: 'Expense', debit_p: 30000000n, credit_p: 0n, blynt_code: '6000', status: 'confirmed', confidence: 100 },
+      { code: '6100', name: 'Gas and Electricity Utilities', type: 'Expense', debit_p: 4120000n, credit_p: 0n, blynt_code: '6100', status: 'confirmed', confidence: 100 },
+      { code: '6900', name: 'Depreciation Charge on Tangibles', type: 'Expense', debit_p: 270000n, credit_p: 0n, blynt_code: '6900', status: 'confirmed', confidence: 100 }, // £2,700.00 matches F-10!
+      { code: '6950', name: 'Loss on Disposal of Computer Equipment', type: 'Expense', debit_p: 15000n, credit_p: 0n, blynt_code: '6950', status: 'confirmed', confidence: 100 }, // £150.00 matches F-10!
+      // Accounts requiring mapping attention (Needs you)
+      { code: '7810', name: 'Special Transition Consulting Fee', type: 'Other', debit_p: 4200000n, credit_p: 0n, blynt_code: null, status: 'needs_you', confidence: 40 },
+      { code: '7820', name: 'Special Warranty Reserve Contra', type: 'Other', debit_p: 0n, credit_p: 4200000n, blynt_code: null, status: 'needs_you', confidence: 35 },
+    ];
+
+    seedLines.forEach((line, idx) => {
+      const lineId = `tbl_${idx + 1}`;
+      this.tb_lines.push({
+        id: lineId,
+        snapshot_id: snapId,
+        source_code: line.code,
+        source_name: line.name,
+        source_type: line.type,
+        debit_p: line.debit_p.toString(),
+        credit_p: line.credit_p.toString(),
+      });
+
+      const netBalance = line.debit_p - line.credit_p;
+      this.account_mappings.push({
+        id: `map_${idx + 1}`,
+        engagement_id: engId,
+        source_code: line.code,
+        source_name: line.name,
+        source_type: line.type,
+        balance_p: netBalance.toString(),
+        blynt_code: line.blynt_code,
+        status: line.status,
+        confidence: line.confidence,
+        method: line.status === 'confirmed' ? 'rule' : line.status === 'suggested' ? 'ai' : 'manual',
+        ai_alternatives:
+          line.status === 'needs_you'
+            ? [
+                { blynt_code: '6000', name: 'Office Rent & Rates', reason: 'Common administrative overhead classification', confidence: 45 },
+                { blynt_code: '2100', name: 'Accruals', reason: 'Potential balance sheet contra provision', confidence: 35 },
+              ]
+            : undefined,
+        confirmed_by: line.status === 'confirmed' ? 'usr_sam' : null,
+        confirmed_at: line.status === 'confirmed' ? '2026-10-02T10:00:00Z' : null,
+        comment_count: 0,
+      });
+    });
+
+    // Seed for Acme Corp Ltd (eng_acme_fy26) matching redesign boards (6 unmapped, 12 suggested)
+    seedLines.forEach((line, idx) => {
+      const netBalance = line.debit_p - line.credit_p;
+      this.account_mappings.push({
+        id: `map_acme_${idx + 1}`,
+        engagement_id: acmeEngId,
+        source_code: line.code,
+        source_name: line.name,
+        source_type: line.type,
+        balance_p: netBalance.toString(),
+        blynt_code: line.blynt_code,
+        status: line.status,
+        confidence: line.confidence,
+        method: line.status === 'confirmed' ? 'rule' : line.status === 'suggested' ? 'ai' : 'manual',
+        ai_alternatives:
+          line.status === 'needs_you'
+            ? [
+                { blynt_code: '6000', name: 'Office Rent & Rates', reason: 'Common administrative overhead classification', confidence: 45 },
+                { blynt_code: '2100', name: 'Accruals', reason: 'Potential balance sheet contra provision', confidence: 35 },
+              ]
+            : undefined,
+        confirmed_by: line.status === 'confirmed' ? 'usr_sarah' : null,
+        confirmed_at: line.status === 'confirmed' ? '2026-10-02T10:00:00Z' : null,
+        comment_count: 0,
+      });
+    });
+
+    // Seed Acme Corp workpapers
+    const f10Ref = this.workpapers.find((w) => w.id === 'wp_f10');
+    if (f10Ref) {
+      this.workpapers.push({
+        ...f10Ref,
+        id: 'wp_acme_f10',
+        engagement_id: acmeEngId,
+      });
+    }
+    const b10Ref = this.workpapers.find((w) => w.id === 'wp_b10');
+    if (b10Ref) {
+      this.workpapers.push({
+        ...b10Ref,
+        id: 'wp_acme_b10',
+        engagement_id: acmeEngId,
+      });
+    }
+
+    // View Preferences
+    this.view_prefs.push({
+      user_id: 'usr_sam',
+      scope: 'user',
+      key: 'general_view',
+      value_json: {
+        showPriorYear: true,
+        showChangePercent: true,
+        showSource: true,
+        showTickmarks: true,
+        rowSpacing: 'comfortable',
+        textSize: 'M',
+        highContrast: false,
+      },
+    });
+
+    // Initial audit log
+    this.logAudit(
+      firmId,
+      { id: 'usr_anika', name: 'Anika Kapoor', role: 'preparer' },
+      'CREATE_SNAPSHOT',
+      'tb_snapshots',
+      snapId,
+      null,
+      { source: 'csv', filename: 'Harlow_Trial_Balance_FY26.csv', sha256: snapHash }
+    );
+  }
+}
+
+// Global Singleton
+const globalDb = new Database();
+export const db = globalDb;
