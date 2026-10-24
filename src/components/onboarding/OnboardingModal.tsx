@@ -60,6 +60,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ forceOpen = fa
   if (onboardingCompleted && !forceOpen) return null;
   if (!open && !forceOpen) return null;
 
+  const handleDismiss = () => {
+    setOnboardingCompleted(true);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('blynt_onboarding_completed', 'true');
+    }
+    setOpen(false);
+    if (onClose) onClose();
+  };
+
   const handleCompleteSetup = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
@@ -148,20 +157,16 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ forceOpen = fa
       className="fixed inset-0 z-50 bg-[#0B1B3D]/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-in fade-in"
     >
       <div className="bg-white border border-[#E3E7EF] rounded-[24px] shadow-2xl max-w-2xl w-full p-6 sm:p-8 flex flex-col relative my-8">
-        {/* Close button if user opened via settings */}
-        {forceOpen && (
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              if (onClose) onClose();
-            }}
-            className="absolute top-5 right-5 p-2 text-[#5B6478] hover:text-[#102654] rounded-full hover:bg-[#F6F7FB]"
-            aria-label="Close setup modal"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        )}
+        {/* Close button */}
+        <button
+          type="button"
+          onClick={handleDismiss}
+          className="absolute top-5 right-5 p-2 text-[#5B6478] hover:text-[#102654] rounded-full hover:bg-[#F6F7FB] transition-colors cursor-pointer"
+          aria-label="Close setup modal"
+          title="Close and explore demo"
+        >
+          <X className="w-5 h-5" />
+        </button>
 
         {/* Top Header */}
         <div className="flex items-center gap-3 mb-6">
@@ -286,7 +291,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ forceOpen = fa
                   </div>
                 </div>
 
-                <div className="pt-4 flex justify-end">
+                <div className="pt-4 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={handleDismiss}
+                    className="text-xs text-[#5B6478] hover:text-[#102654] font-medium underline-offset-4 hover:underline cursor-pointer"
+                  >
+                    Skip &amp; explore demo practice &rarr;
+                  </button>
                   <button
                     type="button"
                     onClick={() => setStep(2)}

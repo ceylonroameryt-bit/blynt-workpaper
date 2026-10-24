@@ -128,4 +128,12 @@ describe('role rules on save', () => {
     reject((v) => (v.comments[0].status = 'resolved'), actor('prep', 'preparer'));
     allow((v) => (v.comments[0].status = 'resolved'), actor('rev', 'reviewer'));
   });
+
+  it('signs up a new firm user and verifies credentials', () => {
+    const pwd = 'TestAuditPass2026!';
+    const h = hashPassword(pwd);
+    expect(verifyPassword(pwd, h)).toBe(true);
+    expect(verifyPassword('WrongPass', h)).toBe(false);
+  });
 });
+

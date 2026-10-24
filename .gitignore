@@ -33,3 +33,4 @@ build/
 .env*
 .neon
 *.tsbuildinfo
+.workspace_state.json

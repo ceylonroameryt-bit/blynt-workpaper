@@ -2,7 +2,16 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/server/auth';
 
 // Reachable without signing in
-const PUBLIC_PATHS = ['/login', '/signup', '/forgot-password', '/reset-password', '/api/v1/auth/login', '/api/v1/auth/logout', '/samples'];
+const PUBLIC_PATHS = [
+  '/login',
+  '/signup',
+  '/forgot-password',
+  '/reset-password',
+  '/api/v1/auth/login',
+  '/api/v1/auth/signup',
+  '/api/v1/auth/logout',
+  '/samples',
+];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

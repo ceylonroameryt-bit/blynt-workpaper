@@ -2,234 +2,318 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import {
-  Briefcase,
-  CheckCircle2,
-  Users,
-  FileSpreadsheet,
   ShieldCheck,
+  CheckCircle2,
+  Sparkles,
+  AlertCircle,
+  ArrowRight,
+  Building2,
+  Lock,
+  Mail,
+  User as UserIcon,
 } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { Field, Input, Select } from '@/components/ui/Field';
+import { BlyntLogo } from '@/components/ui/BlyntLogo';
 
 export default function SignupPage() {
-  const router = useRouter();
   const [fullName, setFullName] = useState('');
   const [workEmail, setWorkEmail] = useState('');
   const [firmName, setFirmName] = useState('');
-  const [role, setRole] = useState('manager');
-  const [password, setPassword] = useState('SuperSecretAudit2026!');
+  const [role, setRole] = useState<'manager' | 'partner' | 'preparer' | 'reviewer' | 'admin'>('manager');
+  const [password, setPassword] = useState('');
   const [agreedToTerms, setAgreedToTerms] = useState(true);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successNotice, setSuccessNotice] = useState(false);
+
+  const handlePrefillSample = () => {
+    const randomSuffix = Math.floor(100 + Math.random() * 900);
+    setFullName('Marcus Sterling');
+    setWorkEmail(`marcus.sterling${randomSuffix}@sterlingaudit.co.uk`);
+    setFirmName(`Sterling & Partners LLP`);
+    setRole('manager');
+    setPassword('AuditSecure2026!');
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    router.push('/clients');
+    if (submitting) return;
+
+    if (!fullName.trim() || !workEmail.trim() || !firmName.trim() || !password) {
+      setErrorMessage('Please fill in all required fields.');
+      return;
+    }
+
+    if (password.length < 8) {
+      setErrorMessage('Password must be at least 8 characters long.');
+      return;
+    }
+
+    if (!agreedToTerms) {
+      setErrorMessage('Please confirm agreement to the audit processing terms.');
+      return;
+    }
+
+    setSubmitting(true);
+    setErrorMessage('');
+
+    try {
+      const res = await fetch('/api/v1/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          workEmail: workEmail.trim(),
+          firmName: firmName.trim(),
+          role,
+          password,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setErrorMessage(data.error || 'Failed to create firm account. Please try again.');
+        setSubmitting(false);
+        return;
+      }
+
+      // Mark onboarding as ready so user isn't prompted with redundant first-time setup
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('blynt_onboarding_completed', 'true');
+        if (data.clientId) {
+          localStorage.setItem('blynt_active_client_id', data.clientId);
+        }
+      }
+
+      setSuccessNotice(true);
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 800);
+    } catch {
+      setErrorMessage('Could not connect to the server. Please check your network and try again.');
+      setSubmitting(false);
+    }
   };
 
   return (
-    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-white text-[#1B2430]">
-      {/* Left Column: Form */}
-      <div className="lg:col-span-6 xl:col-span-5 flex flex-col justify-between p-8 sm:p-12 lg:p-16">
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#F6F7FB] text-[#102654]">
+      {/* Brand Panel Left (Blynt Navy) */}
+      <div className="lg:col-span-6 xl:col-span-5 bg-[#0B1B3D] text-white p-8 sm:p-12 lg:p-16 flex flex-col justify-between">
         <div>
-          {/* Logo */}
-          <Link href="/clients" className="flex items-center gap-2.5 mb-10">
-            <div className="w-9 h-9 rounded-[10px] bg-[#1E4FD8] flex items-center justify-center text-white font-bold">
-              <Briefcase className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-semibold text-lg tracking-tight text-[#1B2430]">
-                Workpapers
-              </span>
-              <span className="text-[10px] uppercase font-bold tracking-wider text-[#5B6676]">
-                Audit Platform
-              </span>
-            </div>
-          </Link>
+          {/* Blynt Logo */}
+          <div className="mb-12">
+            <BlyntLogo variant="full" theme="dark" size="lg" />
+          </div>
 
-          <div className="max-w-[420px]">
-            <div className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#E8EEFD] text-[#1E4FD8] mb-3">
-              Step 1 of 2
-            </div>
-
-            <h1 className="text-[28px] font-semibold text-[#1B2430] tracking-tight">
-              Create firm workspace
+          <div className="max-w-[440px]">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#FF7D6B] bg-[#102654] px-3 py-1 rounded-full border border-[#FF7D6B]/30 inline-block mb-4">
+              Practice Onboarding
+            </span>
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white leading-tight mb-4">
+              Set up your audit firm workspace in seconds
             </h1>
-            <p className="text-sm text-[#5B6676] mt-1.5 mb-6">
-              Start your 30-day firm trial. No credit card required.
+            <p className="text-sm text-[#A6B4D0] leading-relaxed mb-8">
+              Create an isolated firm tenant with role-based sign-offs, standardized working paper packs, and intelligent nominal ledger mapping.
             </p>
 
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              <Field label="Full Name" htmlFor="signup-name" required>
-                <Input
-                  id="signup-name"
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="e.g. Test Reviewer"
-                />
-              </Field>
-
-              <Field label="Work Email" htmlFor="signup-email" required>
-                <Input
-                  id="signup-email"
-                  type="email"
-                  required
-                  value={workEmail}
-                  onChange={(e) => setWorkEmail(e.target.value)}
-                  placeholder="e.g. sam@firm.com"
-                />
-              </Field>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Firm Name" htmlFor="signup-firm" required>
-                  <Input
-                    id="signup-firm"
-                    type="text"
-                    required
-                    value={firmName}
-                    onChange={(e) => setFirmName(e.target.value)}
-                  />
-                </Field>
-
-                <Field label="Your Role" htmlFor="signup-role" required>
-                  <Select
-                    id="signup-role"
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                  >
-                    <option value="manager">Audit Manager</option>
-                    <option value="partner">Engagement Partner</option>
-                    <option value="preparer">Senior Associate / Preparer</option>
-                    <option value="quality">Quality Review Partner (EQR)</option>
-                  </Select>
-                </Field>
+            <div className="flex flex-col gap-4 text-xs text-[#A6B4D0]">
+              <div className="flex items-start gap-3 bg-[#102654]/60 border border-[#1D4E89]/40 p-3.5 rounded-xl">
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-white block font-semibold mb-0.5">Firm Tenant Isolation</strong>
+                  Statutory engagements, trial balance snapshots, and review notes strictly isolated to your firm.
+                </div>
               </div>
 
-              <Field
-                label="Password"
-                htmlFor="signup-password"
-                hint="12+ characters with mixed case and numbers"
-                required
-              >
-                <Input
-                  id="signup-password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-
-              <div className="flex items-start gap-2.5 text-xs text-[#5B6676] mt-2">
-                <input
-                  id="signup-terms"
-                  type="checkbox"
-                  required
-                  checked={agreedToTerms}
-                  onChange={(e) => setAgreedToTerms(e.target.checked)}
-                  className="w-4 h-4 rounded border-[#D5D9E0] text-[#1E4FD8] focus:ring-[#1E4FD8] mt-0.5"
-                />
-                <label htmlFor="signup-terms" className="cursor-pointer select-none leading-relaxed">
-                  I agree to the{' '}
-                  <a href="#terms" className="text-[#1E4FD8] hover:underline">
-                    Master Services Agreement
-                  </a>{' '}
-                  and confirm processing of audit engagement records under confidentiality.
-                </label>
+              <div className="flex items-start gap-3 bg-[#102654]/60 border border-[#1D4E89]/40 p-3.5 rounded-xl">
+                <CheckCircle2 className="w-5 h-5 text-[#FF7D6B] shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-white block font-semibold mb-0.5">Automated Working Paper Packs</strong>
+                  Pre-configured lead schedules (A-Z) and materiality calculators for FRS 102 1A, FRS 105, and IFRS.
+                </div>
               </div>
 
-              <div className="mt-4">
-                <Button type="submit" variant="primary" className="w-full" size="md">
-                  Create account
-                </Button>
+              <div className="flex items-start gap-3 bg-[#102654]/60 border border-[#1D4E89]/40 p-3.5 rounded-xl">
+                <Sparkles className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-white block font-semibold mb-0.5">Instant Working Sample</strong>
+                  Includes a ready-to-test starter company with mapped trial balance and leadsheets.
+                </div>
               </div>
-            </form>
-
-            <div className="mt-6 text-sm text-[#5B6676] text-center">
-              Already have an account?{' '}
-              <Link href="/login" className="text-[#1E4FD8] font-semibold hover:underline">
-                Sign in
-              </Link>
             </div>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="mt-10 pt-6 border-t border-[#E3E6EB] flex items-center gap-6 text-xs text-[#5B6676]">
-          <span>© 2026 Workpapers Inc.</span>
-          <a href="#privacy" className="hover:text-[#1B2430]">
-            Privacy Policy
-          </a>
-          <a href="#terms" className="hover:text-[#1B2430]">
-            Terms
-          </a>
+        <div className="mt-12 pt-6 border-t border-[#1D4E89]/40 text-xs text-[#5B6478] flex items-center justify-between">
+          <span>&copy; {new Date().getFullYear()} Blynt Workpapers.</span>
+          <span className="text-[#A6B4D0]">ISA &amp; UK GAAP Compliant</span>
         </div>
       </div>
 
-      {/* Right Column: Three Setup Steps */}
-      <div className="hidden lg:flex lg:col-span-6 xl:col-span-7 bg-[#E9EFFD] p-12 lg:p-16 flex-col justify-between border-l border-[#D5D9E0]/50">
-        <div className="max-w-[540px]">
-          <span className="text-xs font-semibold uppercase tracking-wider text-[#1E4FD8] mb-3 block">
-            Rapid Deployment
-          </span>
-
-          <h2 className="text-3xl xl:text-4xl font-semibold text-[#1B2430] tracking-tight leading-tight mb-8">
-            Get your audit team live in 3 steps
-          </h2>
-
-          <div className="flex flex-col gap-6">
-            {/* Step 1 */}
-            <div className="bg-white rounded-[14px] border border-[#E3E6EB] p-5 flex items-start gap-4">
-              <div className="w-9 h-9 rounded-full bg-[#1E4FD8] text-white flex items-center justify-center font-bold text-sm shrink-0">
-                1
-              </div>
-              <div>
-                <h3 className="font-semibold text-base text-[#1B2430]">
-                  Create firm account
-                </h3>
-                <p className="text-xs text-[#5B6676] mt-1 leading-relaxed">
-                  Establish your organization’s dedicated, encrypted tenant with single sign-on (SAML/Okta/Azure AD) and audit trail logging.
-                </p>
-              </div>
+      {/* Signup Form Right */}
+      <div className="lg:col-span-6 xl:col-span-7 flex flex-col justify-center items-center p-6 sm:p-12 lg:p-16">
+        <div className="w-full max-w-[460px]">
+          {/* Quick Prefill helper */}
+          <div className="mb-6 p-3.5 bg-[#EAF5FC] border border-[#1D4E89]/20 rounded-xl flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs text-[#1D4E89]">
+              <Sparkles className="w-4 h-4 text-[#1D4E89] shrink-0" />
+              <span>Testing out the platform?</span>
             </div>
-
-            {/* Step 2 */}
-            <div className="bg-white/80 rounded-[14px] border border-[#E3E6EB] p-5 flex items-start gap-4">
-              <div className="w-9 h-9 rounded-full bg-[#E8EEFD] text-[#1E4FD8] flex items-center justify-center font-bold text-sm shrink-0">
-                2
-              </div>
-              <div>
-                <h3 className="font-semibold text-base text-[#1B2430]">
-                  Invite team & assign roles
-                </h3>
-                <p className="text-xs text-[#5B6676] mt-1 leading-relaxed">
-                  Add partners, managers, and associates. Configure segregation of duties so preparers cannot sign off on their own work.
-                </p>
-              </div>
-            </div>
-
-            {/* Step 3 */}
-            <div className="bg-white/80 rounded-[14px] border border-[#E3E6EB] p-5 flex items-start gap-4">
-              <div className="w-9 h-9 rounded-full bg-[#E8EEFD] text-[#1E4FD8] flex items-center justify-center font-bold text-sm shrink-0">
-                3
-              </div>
-              <div>
-                <h3 className="font-semibold text-base text-[#1B2430]">
-                  Import trial balance
-                </h3>
-                <p className="text-xs text-[#5B6676] mt-1 leading-relaxed">
-                  Connect Xero, QuickBooks, SAP, NetSuite, or upload Excel. AI auto-categorizes accounts with confidence scores in real time.
-                </p>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={handlePrefillSample}
+              className="text-xs font-bold text-[#1D4E89] hover:underline cursor-pointer bg-white px-2.5 py-1 rounded-md border border-[#1D4E89]/30"
+            >
+              Fill sample firm details
+            </button>
           </div>
-        </div>
 
-        <div className="text-xs text-[#5B6676] pt-8 flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-[#0B6B4D]" />
-          <span>Compliant with AICPA, IAASB ISA, and PCAOB auditing standards</span>
+          <div className="mb-6">
+            <h2 className="text-2xl font-extrabold text-[#102654] tracking-tight">
+              Create a firm account
+            </h2>
+            <p className="text-xs text-[#5B6478] mt-1">
+              Start your practice workspace. No credit card required.
+            </p>
+          </div>
+
+          {errorMessage && (
+            <div className="mb-5 p-3.5 bg-[#FFF1EE] border border-[#FF7D6B]/30 rounded-xl flex items-start gap-2.5 text-xs text-[#B8432F] animate-in fade-in">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {successNotice && (
+            <div className="mb-5 p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800 animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>Firm workspace created successfully! Redirecting to dashboard…</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div>
+              <label htmlFor="signup-name" className="block text-xs font-bold text-[#102654] mb-1.5 flex items-center gap-1.5">
+                <UserIcon className="w-3.5 h-3.5 text-[#5B6478]" />
+                <span>Your Full Name</span>
+              </label>
+              <input
+                id="signup-name"
+                type="text"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="e.g. Alex Wright"
+                className="w-full min-h-[44px] px-3.5 text-xs bg-white border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] shadow-2xs"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="signup-email" className="block text-xs font-bold text-[#102654] mb-1.5 flex items-center gap-1.5">
+                <Mail className="w-3.5 h-3.5 text-[#5B6478]" />
+                <span>Work Email Address</span>
+              </label>
+              <input
+                id="signup-email"
+                type="email"
+                required
+                value={workEmail}
+                onChange={(e) => setWorkEmail(e.target.value)}
+                placeholder="e.g. alex.wright@wrightaudit.co.uk"
+                className="w-full min-h-[44px] px-3.5 text-xs bg-white border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] shadow-2xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="signup-firm" className="block text-xs font-bold text-[#102654] mb-1.5 flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-[#5B6478]" />
+                  <span>Firm / Practice Name</span>
+                </label>
+                <input
+                  id="signup-firm"
+                  type="text"
+                  required
+                  value={firmName}
+                  onChange={(e) => setFirmName(e.target.value)}
+                  placeholder="e.g. Wright & Co LLP"
+                  className="w-full min-h-[44px] px-3.5 text-xs bg-white border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] shadow-2xs"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="signup-role" className="block text-xs font-bold text-[#102654] mb-1.5">
+                  Your Audit Role
+                </label>
+                <select
+                  id="signup-role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as any)}
+                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] shadow-2xs"
+                >
+                  <option value="manager">Audit Manager</option>
+                  <option value="partner">Engagement Partner</option>
+                  <option value="reviewer">Audit Reviewer</option>
+                  <option value="preparer">Senior Associate (Preparer)</option>
+                  <option value="admin">Firm Administrator</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="signup-password" className="block text-xs font-bold text-[#102654] mb-1.5 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-[#5B6478]" />
+                <span>Password</span>
+              </label>
+              <input
+                id="signup-password"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="w-full min-h-[44px] px-3.5 text-xs bg-white border border-[#D5DBE7] rounded-[10px] text-[#102654] outline-none focus:border-[#FF7D6B] shadow-2xs"
+              />
+            </div>
+
+            <div className="flex items-start gap-2.5 text-xs text-[#5B6478] mt-1">
+              <input
+                id="signup-terms"
+                type="checkbox"
+                required
+                checked={agreedToTerms}
+                onChange={(e) => setAgreedToTerms(e.target.checked)}
+                className="w-4 h-4 rounded border-[#D5DBE7] text-[#102654] focus:ring-[#FF7D6B] mt-0.5 cursor-pointer"
+              />
+              <label htmlFor="signup-terms" className="cursor-pointer select-none leading-relaxed">
+                I agree to the practice terms and confirm processing of audit engagement records under confidentiality.
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="mt-2 min-h-[46px] w-full bg-[#102654] hover:bg-[#0B1B3D] text-white text-xs font-bold rounded-[10px] flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-transform active:scale-[0.99] disabled:opacity-50"
+            >
+              {submitting ? (
+                <span>Creating workspace…</span>
+              ) : (
+                <>
+                  <span>Create Practice Workspace</span>
+                  <ArrowRight className="w-4 h-4 text-[#FF7D6B]" />
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="mt-8 pt-6 border-t border-[#E3E7EF] text-center text-xs text-[#5B6478]">
+            Already have a practice account?{' '}
+            <Link href="/login" className="text-[#B8432F] font-bold hover:underline">
+              Sign in to your firm
+            </Link>
+          </div>
         </div>
       </div>
     </div>

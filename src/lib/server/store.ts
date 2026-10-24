@@ -19,13 +19,17 @@ export interface StoredState {
 
 export const hasDatabase = () => Boolean(process.env.DATABASE_URL);
 
+import path from 'path';
+
 // Fallback when no database is configured (local dev): keep state in this server process,
-// optionally mirrored to LOCAL_STATE_FILE so it survives restarts
-const localFile = process.env.LOCAL_STATE_FILE;
+// mirrored to local workspace state file so all worker threads and server restarts retain accounts
+const localFile =
+  process.env.LOCAL_STATE_FILE ||
+  (!process.env.DATABASE_URL ? path.join(process.cwd(), '.workspace_state.json') : undefined);
 let memoryState: StoredState = loadLocalFile();
 
 function loadLocalFile(): StoredState {
-  if (!localFile) return { version: 0, data: null };
+  if (!localFile || !fs.existsSync(localFile)) return { version: 0, data: null };
   try {
     return JSON.parse(fs.readFileSync(localFile, 'utf8')) as StoredState;
   } catch {
@@ -79,7 +83,16 @@ async function query<T = Record<string, unknown>>(text: string, params: unknown[
 }
 
 export async function readState(): Promise<StoredState> {
-  if (!hasDatabase()) return memoryState;
+  if (!hasDatabase()) {
+    if (localFile && fs.existsSync(localFile)) {
+      try {
+        memoryState = JSON.parse(fs.readFileSync(localFile, 'utf8')) as StoredState;
+      } catch {
+        // use memoryState
+      }
+    }
+    return memoryState;
+  }
   const rows = await query<{ version: number; data: Record<string, unknown[]> }>(
     'SELECT version, data FROM workspace_state WHERE id = $1',
     [WORKSPACE_ID]
