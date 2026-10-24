@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-quartz.css";
+
+:root {
+  /* Brand Tokens (Blynt) */
+  --nav: #0B1B3D;
+  --navy: #102654;
+  --coral: #FF7D6B;
+  --coral-text: #B8432F;
+  --page: #F6F7FB;
+  --card: #FFFFFF;
+  --border: #E3E7EF;
+  --input-border: #D5DBE7;
+  --muted: #5B6478;
+  --muted-strong: #3A4560;
+  
+  --ok-bg: #E6F4EF;
+  --ok: #0B6B52;
+  --warn-bg: #FFF4DB;
+  --warn: #6B4700;
+  --bad-bg: #FDECEA;
+  --bad: #B42318;
+  --info-bg: #EAF5FC;
+  --info: #1D4E89;
+  --ai-bg: #FFF1EE;
+  --ai: #A23A27;
+
+  /* Focus & Radii */
+  --focus-ring: #FF7D6B;
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-pill: 99px;
+}
+
+body {
+  background-color: var(--page);
+  color: var(--navy);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular numerals font for financial figures & codes */
+.font-mono-numbers {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Accessible visible 3px coral focus ring */
+*:focus-visible {
+  outline: 3px solid var(--focus-ring) !important;
+  outline-offset: 2px !important;
+}
+
+/* Blynt Cards */
+.blynt-card {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+/* Control heights >= 44px */
+.min-control-h {
+  min-height: 44px;
+}
+
+/* AG Grid styling with Blynt tokens */
+.ag-theme-quartz {
+  --ag-font-family: 'Inter', sans-serif;
+  --ag-font-size: 13px;
+  --ag-background-color: #ffffff;
+  --ag-header-background-color: #f6f7fb;
+  --ag-border-color: #e3e7ef;
+  --ag-row-border-color: #e3e7ef;
+  --ag-selected-row-background-color: #eaf5fc;
+}
+
+.ag-theme-quartz .number-cell {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Hide Next.js floating development indicator badge that covers bottom-left sidebar */
+[data-nextjs-dev-overlay-button],
+[data-nextjs-toast],
+nextjs-portal {
+  display: none !important;
+}
+

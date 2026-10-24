@@ -1,0 +1,131 @@
+// @vitest-environment node
+import { describe, it, expect } from 'vitest';
+import { hashPassword, verifyPassword, createSessionToken, verifySessionToken, readCookie } from '../lib/server/auth';
+import { firmSlice, mergeFirmState, GuardError, State, Actor } from '../lib/server/state-guard';
+
+describe('passwords and sessions', () => {
+  it('verifies only the right password', () => {
+    const h = hashPassword('correct horse');
+    expect(verifyPassword('correct horse', h)).toBe(true);
+    expect(verifyPassword('wrong', h)).toBe(false);
+    expect(verifyPassword('x', undefined)).toBe(false);
+  });
+
+  it('rejects tampered, forged and expired session tokens', () => {
+    const t = createSessionToken('usr_a');
+    expect(verifySessionToken(t)?.uid).toBe('usr_a');
+    const [body, sig] = t.split('.');
+    const forged = Buffer.from(JSON.stringify({ uid: 'usr_partner', exp: 9999999999 })).toString('base64url');
+    expect(verifySessionToken(`${forged}.${sig}`)).toBeNull();
+    expect(verifySessionToken(`${body}.${sig.slice(0, -2)}xx`)).toBeNull();
+    expect(verifySessionToken(createSessionToken('usr_a', -10))).toBeNull();
+    expect(verifySessionToken('sess_usr_a')).toBeNull();
+  });
+
+  it('reads the session cookie from a request', () => {
+    const req = new Request('http://x', { headers: { cookie: 'a=1; blynt_session=abc.def' } });
+    expect(readCookie(req)).toBe('abc.def');
+  });
+});
+
+const base = (): State => ({
+  firms: [{ id: 'f1' }, { id: 'f2' }],
+  users: [{ id: 'prep' }, { id: 'rev' }, { id: 'part' }, { id: 'other' }],
+  memberships: [
+    { user_id: 'prep', firm_id: 'f1', role: 'preparer' },
+    { user_id: 'rev', firm_id: 'f1', role: 'reviewer' },
+    { user_id: 'part', firm_id: 'f1', role: 'partner' },
+    { user_id: 'other', firm_id: 'f2', role: 'admin' },
+  ],
+  credentials: [{ user_id: 'prep', password_hash: 'secret' }],
+  clients: [{ id: 'c1', firm_id: 'f1' }, { id: 'c2', firm_id: 'f2' }],
+  engagements: [
+    { id: 'e1', firm_id: 'f1', client_id: 'c1', status: 'fieldwork' },
+    { id: 'e2', firm_id: 'f2', client_id: 'c2', status: 'fieldwork' },
+  ],
+  workpapers: [{ id: 'w1', engagement_id: 'e1' }, { id: 'w2', engagement_id: 'e2' }],
+  signoffs: [],
+  adjustments: [{ id: 'a1', engagement_id: 'e1', status: 'proposed', proposed_by: 'prep', approved_by: null }],
+  comments: [{ id: 'n1', workpaper_id: 'w1', type: 'review_note', status: 'open' }],
+  audit_logs: [{ id: 'l1', firm_id: 'f1', actor_id: 'prep' }],
+  templates: [{ id: 't1' }],
+});
+
+const actor = (id: string, role: Actor['role']): Actor => ({ id, name: id, role, firmId: 'f1' });
+const edit = (s: State, fn: (v: State) => void) => {
+  const v = JSON.parse(JSON.stringify(firmSlice(s, 'f1')));
+  fn(v);
+  return v;
+};
+
+describe('firm isolation', () => {
+  it('only exposes the firm slice and never credentials', () => {
+    const v = firmSlice(base(), 'f1');
+    expect(v.clients.map((c) => c.id)).toEqual(['c1']);
+    expect(v.workpapers.map((w) => w.id)).toEqual(['w1']);
+    expect(v.users.map((u) => u.id)).not.toContain('other');
+    expect(v).not.toHaveProperty('credentials');
+  });
+
+  it('keeps other firms untouched and ignores edits to server-managed data', () => {
+    const s = base();
+    const out = mergeFirmState(s, edit(s, (v) => {
+      v.clients = [];
+      v.memberships[0].role = 'admin';
+      v.templates = [];
+    }), actor('prep', 'preparer'));
+    expect(out.clients.map((c) => c.id)).toEqual(['c2']);
+    expect(out.memberships.find((m) => m.user_id === 'prep')?.role).toBe('preparer');
+    expect(out.templates).toHaveLength(1);
+    expect(out.credentials).toHaveLength(1);
+  });
+
+  it('cannot claim another firm’s record', () => {
+    const s = base();
+    const proposed = edit(s, (v) => v.clients.push({ id: 'c2', firm_id: 'f1' }));
+    expect(() => mergeFirmState(s, proposed, actor('prep', 'preparer'))).toThrow(GuardError);
+  });
+});
+
+describe('role rules on save', () => {
+  const s = base();
+  const reject = (fn: (v: State) => void, a: Actor) => expect(() => mergeFirmState(s, edit(s, fn), a)).toThrow(GuardError);
+  const allow = (fn: (v: State) => void, a: Actor) => expect(() => mergeFirmState(s, edit(s, fn), a)).not.toThrow();
+
+  it('sign-offs', () => {
+    const so = (role: string, user_id: string) => (v: State) => v.signoffs.push({ id: 's1', workpaper_id: 'w1', role, user_id });
+    allow(so('preparer', 'prep'), actor('prep', 'preparer'));
+    reject(so('reviewer', 'prep'), actor('prep', 'preparer'));
+    reject(so('partner', 'rev'), actor('rev', 'reviewer'));
+    reject(so('preparer', 'rev'), actor('prep', 'preparer'));
+    allow(so('partner', 'part'), actor('part', 'partner'));
+  });
+
+  it('adjustment approval', () => {
+    const approve = (by: string) => (v: State) => Object.assign(v.adjustments[0], { status: 'approved', approved_by: by });
+    reject(approve('prep'), actor('prep', 'preparer'));
+    allow(approve('rev'), actor('rev', 'reviewer'));
+    reject(approve('part'), actor('rev', 'reviewer'));
+  });
+
+  it('locking and locked engagements', () => {
+    reject((v) => (v.engagements[0].status = 'locked'), actor('rev', 'reviewer'));
+    allow((v) => (v.engagements[0].status = 'locked'), actor('part', 'partner'));
+    const locked = base();
+    locked.engagements[0].status = 'locked';
+    expect(() =>
+      mergeFirmState(locked, edit(locked, (v) => (v.workpapers[0].ref = 'X')), actor('part', 'partner'))
+    ).toThrow(GuardError);
+  });
+
+  it('audit log is append-only and written as yourself', () => {
+    reject((v) => (v.audit_logs = []), actor('part', 'partner'));
+    reject((v) => v.audit_logs.push({ id: 'l2', firm_id: 'f1', actor_id: 'part' }), actor('prep', 'preparer'));
+    allow((v) => v.audit_logs.push({ id: 'l2', firm_id: 'f1', actor_id: 'prep' }), actor('prep', 'preparer'));
+  });
+
+  it('review notes are resolved by reviewers', () => {
+    reject((v) => (v.comments[0].status = 'resolved'), actor('prep', 'preparer'));
+    allow((v) => (v.comments[0].status = 'resolved'), actor('rev', 'reviewer'));
+  });
+});
